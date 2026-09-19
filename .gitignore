@@ -4,3 +4,4 @@ data/*.json
 !data/.gitkeep
 npm-debug.log*
 logs/*.log
+portal/dist/data/operations.json

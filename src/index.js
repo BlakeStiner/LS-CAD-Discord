@@ -16,6 +16,7 @@ const {
 } = require('discord.js');
 const commands = require('./commands');
 const store = require('./store');
+const { writePortalSnapshot } = require('./portal-export');
 
 const { DISCORD_TOKEN, DISCORD_CLIENT_ID, DISCORD_GUILD_ID } = process.env;
 if (!DISCORD_TOKEN || !DISCORD_CLIENT_ID) {
@@ -276,6 +277,13 @@ async function refreshAllDutyRosters() {
   }
 }
 
+async function refreshAllPortalSnapshots() {
+  for (const guildId of Object.keys(store.data().guilds)) {
+    const guild = await client.guilds.fetch(guildId).catch(() => null);
+    if (guild) writePortalSnapshot(guild);
+  }
+}
+
 function statusEmbed(user, record) {
   const completed = record.shifts.filter(shift => shift.end && ensureShiftMetadata(shift).approvalStatus !== 'rejected');
   const totalMs = completed.reduce((total, shift) => total + (new Date(shift.end) - new Date(shift.start)), 0);
@@ -425,9 +433,15 @@ client.once(Events.ClientReady, async readyClient => {
   await checkInactivity();
   await checkShiftReminders();
   await refreshAllDutyRosters();
+  for (const guildId of Object.keys(store.data().guilds)) {
+    const guild = await readyClient.guilds.fetch(guildId).catch(() => null);
+    if (guild) await guild.members.fetch().catch(() => null);
+  }
+  await refreshAllPortalSnapshots();
   setInterval(checkInactivity, 60 * 60 * 1000);
   setInterval(checkShiftReminders, 60 * 1000);
   setInterval(refreshAllDutyRosters, 5 * 60 * 1000);
+  setInterval(refreshAllPortalSnapshots, 60 * 1000);
 });
 
 client.on(Events.InteractionCreate, async interaction => {
