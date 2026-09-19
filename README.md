@@ -16,6 +16,13 @@ Discord bot foundation for replacing FiveRoster's clock-in functionality.
 
 Discord cannot move a message in place. The bot reposts its one control panel after activity in the configured clock channel, keeping it at the bottom; use a dedicated clock channel so the feed stays tidy. The panel buttons remain usable after restarts.
 
+## Feature 2: Incident reports and invoices
+
+- `/incident-report` uses a two-step, simplified **SOAP** form with separate responder name, responder call sign, patient name, Subjective, Objective, Assessment, and Plan fields.
+- `/quick-invoice` opens an **EMS QUICK INVOICE** form with separate responder name and call sign fields, patient name, Bandages, Saline, Morphine, med-kit usage, and explanatory details.
+- `/incident-config channel` (Manage Server) selects where completed reports and invoices are posted. Until configured, they post in the channel where the form was submitted.
+- Reports and invoices are retained in the local CAD data file with a unique reference ID and submitting user.
+- The bot assigns every new report and invoice the next persistent incident number, beginning at **4001**.
 ## Setup
 
 1. Create an application and bot at the [Discord Developer Portal](https://discord.com/developers/applications).

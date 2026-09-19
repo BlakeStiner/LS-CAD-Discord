@@ -10,9 +10,12 @@ const {
   Events,
   GatewayIntentBits,
   PermissionFlagsBits,
+  ModalBuilder,
   REST,
   Routes,
   StringSelectMenuBuilder,
+  TextInputBuilder,
+  TextInputStyle,
 } = require('discord.js');
 const commands = require('./commands');
 const store = require('./store');
@@ -27,6 +30,7 @@ const client = new Client({
 });
 const panelMoves = new Map();
 const rosterRefreshes = new Map();
+const incidentDrafts = new Map();
 let shiftReminderCheckRunning = false;
 const ROSTER_OPTIONS = [
   'Lakeside EMS',
@@ -251,6 +255,77 @@ function statusEmbed(user, record) {
   return new EmbedBuilder().setColor(record.activeShift ? 0x2ecc71 : 0x5865f2).setTitle(`${user.username}'s clock status`).addFields(fields).setTimestamp();
 }
 
+function present(value) {
+  return value?.trim() || 'Not provided';
+}
+
+function nextIncidentNumber(guildData) {
+  const current = Number.isInteger(guildData.nextIncidentNumber) && guildData.nextIncidentNumber >= 4001
+    ? guildData.nextIncidentNumber
+    : 4001;
+  guildData.nextIncidentNumber = current + 1;
+  return String(current);
+}
+
+function incidentDraftKey(interaction) {
+  return `${interaction.guildId}:${interaction.user.id}`;
+}
+
+function incidentInput(customId, label, style, options = {}) {
+  return new ActionRowBuilder().addComponents(
+    new TextInputBuilder()
+      .setCustomId(customId)
+      .setLabel(label)
+      .setStyle(style)
+      .setRequired(true)
+      .setPlaceholder(options.placeholder ?? '')
+      .setMaxLength(options.maxLength ?? 1000),
+  );
+}
+
+async function resolveIncidentChannel(guild, fallbackChannel) {
+  const configuredId = store.guild(guild.id).incidentChannelId;
+  if (configuredId) {
+    const configured = await guild.channels.fetch(configuredId).catch(() => null);
+    if (configured?.isTextBased() && !configured.isDMBased()) return configured;
+  }
+  return fallbackChannel?.isTextBased() && !fallbackChannel.isDMBased() ? fallbackChannel : null;
+}
+
+function soapReportEmbed(report) {
+  return new EmbedBuilder()
+    .setColor(0x3498db)
+    .setTitle('SOAP Incident Report')
+    .addFields(
+      { name: 'Incident Log #', value: report.incidentNumber, inline: true },
+      { name: 'Responder Name', value: present(report.responderName), inline: true },
+      { name: 'Responder Call Sign', value: present(report.responderCallSign), inline: true },
+      { name: 'Patient Name', value: present(report.patient), inline: false },
+      { name: 'S — Subjective', value: present(report.subjective), inline: false },
+      { name: 'O — Objective', value: present(report.objective), inline: false },
+      { name: 'A — Assessment', value: present(report.assessment), inline: false },
+      { name: 'P — Plan', value: present(report.plan), inline: false },
+    )
+    .setFooter({ text: `Submitted by ${report.submittedByTag} • Report ${report.id.slice(0, 8)}` })
+    .setTimestamp(new Date(report.createdAt));
+}
+
+function quickInvoiceEmbed(invoice) {
+  return new EmbedBuilder()
+    .setColor(0x2ecc71)
+    .setTitle('EMS QUICK INVOICE')
+    .addFields(
+      { name: 'Incident Log #', value: invoice.incidentNumber, inline: true },
+      { name: 'Responder Name', value: present(invoice.responderName), inline: true },
+      { name: 'Responder Call Sign', value: present(invoice.responderCallSign), inline: true },
+      { name: 'Date', value: timestamp(invoice.createdAt), inline: true },
+      { name: 'Patient Name', value: present(invoice.patient), inline: false },
+      { name: 'Services', value: present(invoice.services), inline: false },
+      { name: 'Med Kit Usage / Details', value: present(invoice.medKitDetails), inline: false },
+    )
+    .setFooter({ text: `Submitted by ${invoice.submittedByTag} • Invoice ${invoice.id.slice(0, 8)}` })
+    .setTimestamp(new Date(invoice.createdAt));
+}
 async function checkInactivity() {
   const now = Date.now();
   for (const [guildId, guildData] of Object.entries(store.data().guilds)) {
@@ -392,9 +467,41 @@ client.once(Events.ClientReady, async readyClient => {
 client.on(Events.InteractionCreate, async interaction => {
   try {
     if (!interaction.guildId) return;
+    const guildData = store.guild(interaction.guildId);
     if (interaction.isChatInputCommand()) {
-      const guildData = store.guild(interaction.guildId);
-      if (interaction.commandName === 'clock-panel') {
+      if (interaction.commandName === 'incident-config') {
+        const channel = interaction.options.getChannel('channel', true);
+        if (!channel.isTextBased() || channel.isDMBased()) return interaction.reply({ content: 'Choose a server text channel for incident reports.', ephemeral: true });
+        guildData.incidentChannelId = channel.id;
+        store.save();
+        return interaction.reply({ content: `Incident reports and invoices will post in ${channel}.`, ephemeral: true });
+      }
+      if (interaction.commandName === 'incident-report') {
+        const modal = new ModalBuilder()
+          .setCustomId('incident:report-details')
+          .setTitle('SOAP Incident Report • 1 of 2')
+          .addComponents(
+            incidentInput('incident-responder-name', 'Responder Name', TextInputStyle.Short, { placeholder: 'Blake Stiner', maxLength: 100 }),
+            incidentInput('incident-responder-callsign', 'Responder Call Sign', TextInputStyle.Short, { placeholder: 'E-400', maxLength: 100 }),
+            incidentInput('incident-patient', 'Patient Name', TextInputStyle.Short, { placeholder: 'Jane Doe', maxLength: 200 }),
+            incidentInput('incident-subjective', 'S — Subjective', TextInputStyle.Paragraph, { placeholder: 'Chief complaint and relevant statements.' }),
+            incidentInput('incident-objective', 'O — Objective', TextInputStyle.Paragraph, { placeholder: 'Observed condition, vital details, treatments.' }),
+          );
+        return interaction.showModal(modal);
+      }
+      if (interaction.commandName === 'quick-invoice') {
+        const modal = new ModalBuilder()
+          .setCustomId('incident:invoice')
+          .setTitle('EMS Quick Invoice')
+          .addComponents(
+            incidentInput('invoice-responder-name', 'Responder Name', TextInputStyle.Short, { placeholder: 'Blake Stiner', maxLength: 100 }),
+            incidentInput('invoice-responder-callsign', 'Responder Call Sign', TextInputStyle.Short, { placeholder: 'E-400', maxLength: 100 }),
+            incidentInput('invoice-patient', 'Patient Name', TextInputStyle.Short, { placeholder: 'Jane Doe', maxLength: 200 }),
+            incidentInput('invoice-services', 'Services', TextInputStyle.Paragraph, { placeholder: 'Bandages: 0\nSaline: 0\nMorphine: 0', maxLength: 1000 }),
+            incidentInput('invoice-medkit', 'Med Kit Usage and Details', TextInputStyle.Paragraph, { placeholder: 'Med Kit Usage: No\nDetails: Multiple gunshot wounds and 2 broken bones.', maxLength: 1000 }),
+          );
+        return interaction.showModal(modal);
+      }      if (interaction.commandName === 'clock-panel') {
         const channel = interaction.options.getChannel('channel') ?? interaction.channel;
         if (!channel?.isTextBased() || channel.isDMBased()) return interaction.reply({ content: 'Choose a server text channel for the clock panel.', ephemeral: true });
         await ensurePanel(interaction.guild, channel);
@@ -522,7 +629,86 @@ client.on(Events.InteractionCreate, async interaction => {
       }
     }
 
+    if (interaction.isModalSubmit()) {
+      if (interaction.customId === 'incident:report-details') {
+        const key = incidentDraftKey(interaction);
+        const draft = {
+          responderName: interaction.fields.getTextInputValue('incident-responder-name'),
+          responderCallSign: interaction.fields.getTextInputValue('incident-responder-callsign'),
+          patient: interaction.fields.getTextInputValue('incident-patient'),
+          subjective: interaction.fields.getTextInputValue('incident-subjective'),
+          objective: interaction.fields.getTextInputValue('incident-objective'),
+          submittedBy: interaction.user.id,
+          submittedByTag: interaction.user.tag,
+        };
+        incidentDrafts.set(key, draft);
+        const cleanup = setTimeout(() => {
+          if (incidentDrafts.get(key) === draft) incidentDrafts.delete(key);
+        }, 15 * 60 * 1000);
+        cleanup.unref();
+        return interaction.reply({
+          content: 'Step 1 saved. Continue to add the assessment and plan.',
+          components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('incident:continue').setLabel('Continue SOAP Report').setStyle(ButtonStyle.Primary))],
+          ephemeral: true,
+        });
+      }
+
+      if (interaction.customId === 'incident:report-soap') {
+        const key = incidentDraftKey(interaction);
+        const draft = incidentDrafts.get(key);
+        if (!draft) return interaction.reply({ content: 'This report draft expired. Please start `/incident-report` again.', ephemeral: true });
+        const channel = await resolveIncidentChannel(interaction.guild, interaction.channel);
+        if (!channel) return interaction.reply({ content: 'No usable incident channel is configured. Ask an administrator to run `/incident-config` in a server text channel.', ephemeral: true });
+        const createdAt = new Date().toISOString();
+        const report = {
+          id: randomUUID(),
+          incidentNumber: nextIncidentNumber(guildData),
+          createdAt,
+          ...draft,
+          assessment: interaction.fields.getTextInputValue('incident-assessment'),
+          plan: interaction.fields.getTextInputValue('incident-plan'),
+        };
+        incidentDrafts.delete(key);
+        guildData.incidentReports.push(report);
+        store.save();
+        await channel.send({ embeds: [soapReportEmbed(report)] });
+        return interaction.reply({ content: `SOAP incident report **#${report.incidentNumber}** submitted to ${channel}. Reference: \`${report.id.slice(0, 8)}\`.`, ephemeral: true });
+      }
+
+      if (interaction.customId === 'incident:invoice') {
+        const channel = await resolveIncidentChannel(interaction.guild, interaction.channel);
+        if (!channel) return interaction.reply({ content: 'No usable incident channel is configured. Ask an administrator to run `/incident-config` in a server text channel.', ephemeral: true });
+        const createdAt = new Date().toISOString();
+        const invoice = {
+          id: randomUUID(),
+          incidentNumber: nextIncidentNumber(guildData),
+          createdAt,
+          submittedBy: interaction.user.id,
+          submittedByTag: interaction.user.tag,
+          responderName: interaction.fields.getTextInputValue('invoice-responder-name'),
+          responderCallSign: interaction.fields.getTextInputValue('invoice-responder-callsign'),
+          patient: interaction.fields.getTextInputValue('invoice-patient'),
+          services: interaction.fields.getTextInputValue('invoice-services'),
+          medKitDetails: interaction.fields.getTextInputValue('invoice-medkit'),
+        };
+        guildData.invoices.push(invoice);
+        store.save();
+        await channel.send({ embeds: [quickInvoiceEmbed(invoice)] });
+        return interaction.reply({ content: `EMS Quick Invoice for incident **#${invoice.incidentNumber}** submitted to ${channel}. Reference: \`${invoice.id.slice(0, 8)}\`.`, ephemeral: true });
+      }
+    }
     if (interaction.isButton()) {
+      if (interaction.customId === 'incident:continue') {
+        const draft = incidentDrafts.get(incidentDraftKey(interaction));
+        if (!draft) return interaction.reply({ content: 'This report draft expired. Please start `/incident-report` again.', ephemeral: true });
+        return interaction.showModal(new ModalBuilder()
+          .setCustomId('incident:report-soap')
+          .setTitle('SOAP Incident Report • 2 of 2')
+          .addComponents(
+            incidentInput('incident-assessment', 'A — Assessment', TextInputStyle.Paragraph, { placeholder: 'Working assessment or condition.' }),
+            incidentInput('incident-plan', 'P — Plan', TextInputStyle.Paragraph, { placeholder: 'Care, transport, handoff, or disposition.' }),
+          ));
+      }
       const record = store.member(interaction.guildId, interaction.user.id);
       if (interaction.customId === 'clock:in') {
         if (record.activeShift) return interaction.reply({ content: `You are already clocked in for **${record.activeShift.department}** since ${timestamp(record.activeShift.start)}.`, ephemeral: true });

@@ -34,12 +34,19 @@ function guild(guildId) {
       panelMessageId: null,
       rosterChannelId: null,
       rosterMessageId: null,
+      incidentChannelId: null,
+      incidentReports: [],
+      invoices: [],
+      nextIncidentNumber: 4001,
       trackedRoleId: null,
       inactivityDays: 7,
       enforcementStartedAt: null,
       members: {},
     };
   }
+  if (!Array.isArray(data.guilds[guildId].incidentReports)) data.guilds[guildId].incidentReports = [];
+  if (!Array.isArray(data.guilds[guildId].invoices)) data.guilds[guildId].invoices = [];
+  if (!Number.isInteger(data.guilds[guildId].nextIncidentNumber) || data.guilds[guildId].nextIncidentNumber < 4001) data.guilds[guildId].nextIncidentNumber = 4001;
   return data.guilds[guildId];
 }
 

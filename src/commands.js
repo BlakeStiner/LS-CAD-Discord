@@ -73,6 +73,20 @@ const commands = [
     .addStringOption(option => option.setName('decision').setDescription('Approval decision').setRequired(true)
       .addChoices({ name: 'Approve', value: 'approved' }, { name: 'Reject', value: 'rejected' }))
     .addStringOption(option => option.setName('note').setDescription('Optional review note').setMaxLength(300)),
+  new SlashCommandBuilder()
+    .setName('incident-report')
+    .setDescription('Create a simplified SOAP incident report'),
+  new SlashCommandBuilder()
+    .setName('quick-invoice')
+    .setDescription('Create an EMS Quick Invoice for an incident'),
+  new SlashCommandBuilder()
+    .setName('incident-config')
+    .setDescription('Configure where incident reports and invoices are posted')
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+    .addChannelOption(option => option
+      .setName('channel')
+      .setDescription('Text channel for incident reports and invoices')
+      .setRequired(true)),
 ].map(command => command.toJSON());
 
 module.exports = commands;
