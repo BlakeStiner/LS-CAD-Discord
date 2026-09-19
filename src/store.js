@@ -34,12 +34,16 @@ function guild(guildId) {
       panelMessageId: null,
       rosterChannelId: null,
       rosterMessageId: null,
+      unitRosterChannelId: null,
+      unitRosterMessageId: null,
+      echoUnitAssignments: {},
       trackedRoleId: null,
       inactivityDays: 7,
       enforcementStartedAt: null,
       members: {},
     };
   }
+  if (!data.guilds[guildId].echoUnitAssignments || typeof data.guilds[guildId].echoUnitAssignments !== 'object' || Array.isArray(data.guilds[guildId].echoUnitAssignments)) data.guilds[guildId].echoUnitAssignments = {};
   return data.guilds[guildId];
 }
 
