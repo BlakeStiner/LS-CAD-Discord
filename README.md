@@ -1,5 +1,9 @@
 # Lakeside Medical CAD
 
+## Web portal framework
+
+The initial private operations dashboard lives in `portal/`. It provides a responsive EMS manager surface for the live duty roster, shift tracking, attendance, leave-of-absence coverage, and audit activity. The figures are representative portal data until the Discord bot API and account authentication are connected.
+
 Discord bot foundation for replacing FiveRoster's clock-in functionality.
 
 ## Feature 1: Clocking and attendance strikes
