@@ -73,6 +73,46 @@ function parseIsoDate(value, label) {
   return parsed.toISOString();
 }
 
+function parseLeaveDate(value, label) {
+  const normalized = value.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) throw new Error(`${label} must use YYYY-MM-DD.`);
+  const parsed = new Date(`${normalized}T00:00:00.000Z`);
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== normalized) throw new Error(`${label} is not a valid calendar date.`);
+  return normalized;
+}
+
+function leaveRange(request) {
+  return {
+    start: new Date(`${request.startDate}T00:00:00.000Z`).getTime(),
+    end: new Date(`${request.endDate}T23:59:59.999Z`).getTime(),
+  };
+}
+
+function leaveRequestReference(request) {
+  return request.id.slice(0, 8);
+}
+
+function findLeaveRequest(requests, memberId, reference) {
+  const normalized = reference.trim().toLowerCase();
+  const matches = requests.filter(request => request.memberId === memberId && request.id.toLowerCase().startsWith(normalized));
+  return matches.length === 1 ? matches[0] : null;
+}
+
+function leavesOverlap(first, second) {
+  const firstRange = leaveRange(first);
+  const secondRange = leaveRange(second);
+  return firstRange.start <= secondRange.end && secondRange.start <= firstRange.end;
+}
+
+function approvedLeaveMilliseconds(requests, memberId, baseline, now) {
+  return requests
+    .filter(request => request.memberId === memberId && request.status === 'approved')
+    .reduce((total, request) => {
+      const range = leaveRange(request);
+      return total + Math.max(0, Math.min(now, range.end) - Math.max(baseline, range.start));
+    }, 0);
+}
+
 function panelPayload() {
   const embed = new EmbedBuilder()
     .setColor(0x2ecc71)
@@ -272,14 +312,15 @@ async function checkInactivity() {
         discordMember?.joinedTimestamp ?? 0,
       );
       if (!baseline) continue;
-      const elapsed = now - baseline;
+      const approvedLeaveMs = approvedLeaveMilliseconds(guildData.leaveRequests, memberId, baseline, now);
+      const elapsed = Math.max(0, now - baseline - approvedLeaveMs);
       const gracePeriod = guildData.inactivityDays * 24 * 60 * 60 * 1000;
       const expectedStrikes = elapsed < gracePeriod ? 0 : 1 + Math.floor((elapsed - gracePeriod) / (7 * 24 * 60 * 60 * 1000));
       const strikesToAdd = expectedStrikes - record.lastInactivityStrikeWeek;
       if (strikesToAdd <= 0) continue;
       record.strikes += strikesToAdd;
       record.lastInactivityStrikeWeek = expectedStrikes;
-      record.strikeHistory.push({ at: new Date().toISOString(), delta: strikesToAdd, reason: `No clock-in since ${new Date(baseline).toISOString()}` });
+      record.strikeHistory.push({ at: new Date().toISOString(), delta: strikesToAdd, reason: `No clock-in since ${new Date(baseline).toISOString()}; approved leave excluded` });
       await sendClockLog(guild, new EmbedBuilder().setColor(0xe74c3c).setTitle('Attendance strike issued').setDescription(`${discordMember ?? `<@${memberId}>`} received **${strikesToAdd}** inactivity strike${strikesToAdd === 1 ? '' : 's'}.`).addFields({ name: 'Last clock-in', value: timestamp(baseline), inline: true }, { name: 'Current strike count', value: String(record.strikes), inline: true }).setTimestamp());
       store.save();
     }
@@ -421,6 +462,98 @@ client.on(Events.InteractionCreate, async interaction => {
         store.save();
         await refreshDutyRoster(interaction.guild);
         return interaction.reply({ content: `Attendance checks: **${guildData.inactivityDays} day(s)**. Tracking role: ${guildData.trackedRoleId ? `<@&${guildData.trackedRoleId}>` : 'members with clock history only'}.`, ephemeral: true });
+      }
+      if (interaction.commandName === 'loa-request') {
+        const reason = interaction.options.getString('reason', true).trim();
+        let startDate;
+        let endDate;
+        try {
+          startDate = parseLeaveDate(interaction.options.getString('start-date', true), 'Start date');
+          endDate = parseLeaveDate(interaction.options.getString('end-date', true), 'End date');
+        } catch (error) {
+          return interaction.reply({ content: error.message, ephemeral: true });
+        }
+        if (endDate < startDate) return interaction.reply({ content: 'The end date must be on or after the start date.', ephemeral: true });
+        const request = {
+          id: randomUUID(),
+          memberId: interaction.user.id,
+          startDate,
+          endDate,
+          reason,
+          status: 'pending',
+          requestedAt: new Date().toISOString(),
+          reviewedAt: null,
+          reviewedBy: null,
+          reviewNote: null,
+        };
+        const conflictingRequest = guildData.leaveRequests.find(existing => existing.memberId === request.memberId && existing.status !== 'declined' && leavesOverlap(existing, request));
+        if (conflictingRequest) {
+          return interaction.reply({ content: `You already have a **${conflictingRequest.status}** leave request (\`${leaveRequestReference(conflictingRequest)}\`) that overlaps those dates.`, ephemeral: true });
+        }
+        guildData.leaveRequests.push(request);
+        store.save();
+        return interaction.reply({ embeds: [new EmbedBuilder()
+          .setColor(0xf1c40f)
+          .setTitle('Leave request submitted')
+          .setDescription('Your request is pending manager review.')
+          .addFields(
+            { name: 'Request ID', value: `\`${leaveRequestReference(request)}\``, inline: true },
+            { name: 'Leave dates', value: `${request.startDate} through ${request.endDate}`, inline: true },
+            { name: 'Reason', value: reason, inline: false },
+          )
+          .setTimestamp()], ephemeral: true });
+      }
+      if (interaction.commandName === 'loa-status') {
+        const user = interaction.options.getUser('member') ?? interaction.user;
+        const requests = guildData.leaveRequests
+          .filter(request => request.memberId === user.id)
+          .sort((first, second) => second.requestedAt.localeCompare(first.requestedAt));
+        if (!requests.length) return interaction.reply({ content: `${user} has no recorded leave-of-absence requests.`, ephemeral: true });
+        const canViewReasons = user.id === interaction.user.id || interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild);
+        const fields = requests.slice(0, 10).map(request => ({
+          name: `\`${leaveRequestReference(request)}\` — ${request.status}`,
+          value: `${request.startDate} through ${request.endDate}${canViewReasons ? `\nReason: ${request.reason}` : ''}${request.reviewNote && canViewReasons ? `\nReview note: ${request.reviewNote}` : ''}`,
+          inline: false,
+        }));
+        return interaction.reply({ embeds: [new EmbedBuilder()
+          .setColor(0x5865f2)
+          .setTitle(`${user.username}'s leave requests`)
+          .setDescription(requests.length > 10 ? `Showing the 10 most recent of ${requests.length} requests.` : 'Date ranges are inclusive.')
+          .addFields(fields)
+          .setTimestamp()], ephemeral: true });
+      }
+      if (interaction.commandName === 'loa-review') {
+        const user = interaction.options.getUser('member', true);
+        const request = findLeaveRequest(guildData.leaveRequests, user.id, interaction.options.getString('request-id', true));
+        if (!request) return interaction.reply({ content: 'No unique leave request matched that member and ID. Use the short ID shown by `/loa-status`.', ephemeral: true });
+        if (request.status !== 'pending') return interaction.reply({ content: `Leave request \`${leaveRequestReference(request)}\` is already **${request.status}**.`, ephemeral: true });
+        const decision = interaction.options.getString('decision', true);
+        if (decision === 'approved') {
+          const overlap = guildData.leaveRequests.find(existing => existing.id !== request.id && existing.memberId === user.id && existing.status === 'approved' && leavesOverlap(existing, request));
+          if (overlap) return interaction.reply({ content: `This overlaps approved leave request \`${leaveRequestReference(overlap)}\`. Decline or adjust one of the requests first.`, ephemeral: true });
+        }
+        const note = interaction.options.getString('note')?.trim() || null;
+        request.status = decision;
+        request.reviewedAt = new Date().toISOString();
+        request.reviewedBy = interaction.user.id;
+        request.reviewNote = note;
+        store.save();
+        const color = decision === 'approved' ? 0x2ecc71 : 0xe74c3c;
+        const decisionLabel = decision === 'approved' ? 'approved' : 'declined';
+        await interaction.reply({ content: `Leave request \`${leaveRequestReference(request)}\` for ${user} was **${decisionLabel}**.`, ephemeral: true });
+        await user.send({ embeds: [new EmbedBuilder()
+          .setColor(color)
+          .setTitle(`Leave request ${decisionLabel}`)
+          .setDescription(`Your leave request for **${request.startDate} through ${request.endDate}** was ${decisionLabel}.`)
+          .addFields(note ? { name: 'Review note', value: note, inline: false } : { name: 'Review note', value: 'No note provided.', inline: false })
+          .setTimestamp()] }).catch(() => null);
+        await sendClockLog(interaction.guild, new EmbedBuilder()
+          .setColor(color)
+          .setTitle(`Leave request ${decisionLabel}`)
+          .setDescription(`${user}'s leave request was ${decisionLabel}.`)
+          .addFields({ name: 'Leave dates', value: `${request.startDate} through ${request.endDate}`, inline: true }, { name: 'Reviewed by', value: `${interaction.user}`, inline: true })
+          .setTimestamp());
+        return;
       }
       if (interaction.commandName === 'clock-status') {
         const user = interaction.options.getUser('member') ?? interaction.user;
