@@ -16,6 +16,13 @@ Discord bot foundation for replacing FiveRoster's clock-in functionality.
 
 Discord cannot move a message in place. The bot reposts its one control panel after activity in the configured clock channel, keeping it at the bottom; use a dedicated clock channel so the feed stays tidy. The panel buttons remain usable after restarts.
 
+## Feature 2: Leave of absence
+
+- Members submit inclusive date-range requests with `/loa-request`.
+- Managers approve or decline with `/loa-review`; the member receives the outcome by direct message when possible.
+- `/loa-status` lists a member's request IDs and states. Reasons are visible only to the member and server managers.
+- Approved leave time is excluded from inactivity-strike calculations, so strike timing pauses for the approved dates. Pending or declined requests have no effect.
+
 ## Setup
 
 1. Create an application and bot at the [Discord Developer Portal](https://discord.com/developers/applications).
@@ -43,5 +50,8 @@ Discord cannot move a message in place. The bot reposts its one control panel af
 | `/time-add member roster start end reason` | Manage Server | Add a manual shift for approval; timestamps use ISO 8601 format |
 | `/time-edit member shift-id [roster] [start] [end] reason` | Manage Server | Correct a completed shift and return it to pending approval |
 | `/time-approve member shift-id decision [note]` | Manage Server | Approve or reject a pending manual/corrected shift |
+| `/loa-request start-date end-date reason` | Everyone | Request a date-bound leave of absence using YYYY-MM-DD dates |
+| `/loa-status [member]` | Everyone | View leave-request statuses and short request IDs |
+| `/loa-review member request-id decision [note]` | Manage Server | Approve or decline a pending leave request |
 
 Data is stored locally in `data/clock-data.json`; use a persistent volume when deploying the bot.

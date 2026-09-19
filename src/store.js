@@ -37,9 +37,11 @@ function guild(guildId) {
       trackedRoleId: null,
       inactivityDays: 7,
       enforcementStartedAt: null,
+      leaveRequests: [],
       members: {},
     };
   }
+  if (!Array.isArray(data.guilds[guildId].leaveRequests)) data.guilds[guildId].leaveRequests = [];
   return data.guilds[guildId];
 }
 
