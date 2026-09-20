@@ -17,7 +17,7 @@ const {
 } = require('discord.js');
 const commands = require('./commands');
 const store = require('./store');
-const { writePortalSnapshot } = require('./portal-export');
+const { writePortalSnapshot, publishPortalSnapshot } = require('./portal-export');
 
 const { DISCORD_TOKEN, DISCORD_CLIENT_ID, DISCORD_GUILD_ID } = process.env;
 if (!DISCORD_TOKEN || !DISCORD_CLIENT_ID) {
@@ -333,7 +333,10 @@ async function refreshAllDutyRosters() {
 async function refreshAllPortalSnapshots() {
   for (const guildId of Object.keys(store.data().guilds)) {
     const guild = await client.guilds.fetch(guildId).catch(() => null);
-    if (guild) writePortalSnapshot(guild);
+    if (guild) {
+      const snapshot = writePortalSnapshot(guild);
+      await publishPortalSnapshot(snapshot);
+    }
   }
 }
 

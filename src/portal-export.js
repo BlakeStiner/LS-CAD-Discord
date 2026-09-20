@@ -104,4 +104,32 @@ function writePortalSnapshot(guild) {
   return snapshot;
 }
 
-module.exports = { buildPortalSnapshot, writePortalSnapshot, snapshotPath };
+async function publishPortalSnapshot(snapshot) {
+  const endpoint = process.env.PORTAL_INGEST_URL?.trim();
+  const token = process.env.PORTAL_INGEST_TOKEN?.trim();
+  if (!endpoint || !token) return false;
+
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(snapshot),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) throw new Error(`Portal returned ${response.status}`);
+    return true;
+  } catch (error) {
+    console.error('Could not publish portal snapshot:', error.message);
+    return false;
+  }
+}
+
+module.exports = {
+  buildPortalSnapshot,
+  writePortalSnapshot,
+  publishPortalSnapshot,
+  snapshotPath,
+};
