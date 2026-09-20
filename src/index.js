@@ -26,6 +26,9 @@ if (!DISCORD_TOKEN || !DISCORD_CLIENT_ID) {
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildMessages],
 });
+client.on(Events.Error, error => {
+  console.error('Discord client error:', error);
+});
 const panelMoves = new Map();
 const rosterRefreshes = new Map();
 let shiftReminderCheckRunning = false;
@@ -720,6 +723,10 @@ client.on(Events.InteractionCreate, async interaction => {
       await refreshDutyRoster(interaction.guild);
     }
   } catch (error) {
+    if (error?.code === 10062) {
+      console.warn(`Ignoring expired interaction ${interaction.id}.`);
+      return;
+    }
     console.error('Interaction error:', error);
     const payload = { content: 'Something went wrong while handling that request. Please try again.', ephemeral: true };
     if (interaction.deferred || interaction.replied) await interaction.followUp(payload).catch(() => null);
