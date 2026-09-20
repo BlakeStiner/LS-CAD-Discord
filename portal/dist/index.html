@@ -21,43 +21,33 @@
           <a class="nav-link" href="#leave" data-view="Leave Calendar"><span>▣</span>Leave Calendar</a>
           <a class="nav-link" href="#activity" data-view="Activity"><span>ϟ</span>Activity</a>
         </nav>
-        <div class="sidebar-footer"><div class="connection"><span></span>Discord connected</div><div class="profile"><span class="avatar avatar-admin">BS</span><span><strong>BlakeStiner</strong><small>Portal administrator</small></span><button aria-label="Account menu" type="button">⋮</button></div></div>
+        <div class="sidebar-footer"><div class="connection"><span></span>Discord connected</div><div class="profile"><span class="avatar avatar-admin">—</span><span><strong>Portal account</strong><small>Authentication pending</small></span><button aria-label="Account menu" type="button">⋮</button></div></div>
       </aside>
       <main>
-        <header class="topbar"><button class="mobile-menu" type="button" aria-label="Open navigation">☰</button><div><span class="eyebrow">OPERATIONS PORTAL</span><h1 id="page-title">Lakeside EMS</h1></div><div class="top-actions"><span class="sync-status"><i></i><span id="sync-label">Synced just now</span></span><button id="refresh" class="button-secondary" type="button">↻ Refresh</button></div></header>
-        <section id="dashboard" class="dashboard-intro"><div><p class="eyebrow">LIVE OPERATIONS</p><h2>Duty at a glance.</h2><p class="muted">A single home for roster visibility, shift activity, attendance, and approved leave.</p></div><div class="view-toggle" aria-label="Portal view"><button class="selected" type="button">Manager</button><button type="button">My view</button></div></section>
+        <header class="topbar"><button class="mobile-menu" type="button" aria-label="Open navigation">☰</button><div><span class="eyebrow">OPERATIONS PORTAL</span><h1 id="page-title">Lakeside EMS</h1></div><div class="top-actions"><span class="sync-status"><i></i><span id="sync-label">No operations snapshot published</span></span><button id="refresh" class="button-secondary" type="button">↻ Refresh</button></div></header>
+        <section id="dashboard" class="dashboard-intro"><div><p class="eyebrow">LIVE OPERATIONS</p><h2>Duty at a glance.</h2><p class="muted">This read-only portal will show verified roster, shift, attendance, and approved leave data once a source is connected.</p></div><div class="view-toggle" aria-label="Portal view"><button class="selected" type="button">Manager</button><button type="button">My view</button></div></section>
         <section class="metrics" aria-label="Roster metrics">
-          <article class="metric-card"><span class="metric-label">MEMBERS</span><strong data-metric="members">42</strong><span class="trend neutral" data-metric-detail="members">Portal roster</span><span class="spark blue"></span></article>
-          <article class="metric-card"><span class="metric-label">ON SHIFT NOW</span><strong class="blue-text" data-metric="on-duty">3</strong><span class="trend" data-metric-detail="on-duty">Live snapshot</span><span class="spark yellow"></span></article>
-          <article class="metric-card"><span class="metric-label">ACTIVE STRIKES</span><strong class="danger-text" data-metric="strikes">5</strong><span class="trend" data-metric-detail="strikes">Current total</span><span class="spark red"></span></article>
-          <article class="metric-card"><span class="metric-label">APPROVED LEAVE</span><strong class="purple-text" data-metric="leave">2</strong><span class="trend" data-metric-detail="leave">Members away today</span><span class="spark purple"></span></article>
+          <article class="metric-card"><span class="metric-label">MEMBERS</span><strong data-metric="members">—</strong><span class="trend neutral" data-metric-detail="members">No snapshot published</span><span class="spark blue"></span></article>
+          <article class="metric-card"><span class="metric-label">ON SHIFT NOW</span><strong class="blue-text" data-metric="on-duty">—</strong><span class="trend" data-metric-detail="on-duty">No snapshot published</span><span class="spark yellow"></span></article>
+          <article class="metric-card"><span class="metric-label">ACTIVE STRIKES</span><strong class="danger-text" data-metric="strikes">—</strong><span class="trend" data-metric-detail="strikes">No snapshot published</span><span class="spark red"></span></article>
+          <article class="metric-card"><span class="metric-label">APPROVED LEAVE</span><strong class="purple-text" data-metric="leave">—</strong><span class="trend" data-metric-detail="leave">No snapshot published</span><span class="spark purple"></span></article>
         </section>
         <section class="content-grid">
-          <article id="shifts" class="panel live-panel"><div class="panel-heading"><div><span class="eyebrow">SHIFT TRACKING</span><h3>On duty now</h3></div><a href="#roster">Open roster <span>→</span></a></div><div id="duty-list" class="duty-list">
-            <div class="duty-row"><span class="avatar avatar-cyan">NB</span><div><strong>Nihlus Bane</strong><small>E-403 · Paramedic</small></div><time>4h 12m</time><span class="status-dot"></span></div>
-            <div class="duty-row"><span class="avatar avatar-yellow">BS</span><div><strong>BlakeStiner</strong><small>E-408 · Senior Paramedic</small></div><time>2h 07m</time><span class="status-dot"></span></div>
-            <div class="duty-row"><span class="avatar avatar-purple">JW</span><div><strong>Jcwilkinson</strong><small>E-416 · EMT</small></div><time>1h 36m</time><span class="status-dot"></span></div>
-          </div><button class="text-button" type="button">View full shift board <span>→</span></button></article>
-          <article id="leave" class="panel leave-panel"><div class="panel-heading"><div><span class="eyebrow">LEAVE OF ABSENCE</span><h3>Upcoming coverage</h3></div><button class="button-secondary compact" type="button">Open calendar</button></div>
-            <div id="leave-list"><div class="leave-date"><span class="date-box"><b>20</b><small>SEP</small></span><div><strong>Jenna Morgan</strong><small>Approved leave · Sep 20–22</small></div><span class="pill approved">Approved</span></div>
-            <div class="leave-date"><span class="date-box"><b>24</b><small>SEP</small></span><div><strong>Marcus Lee</strong><small>Pending review · Sep 24–25</small></div><span class="pill pending">Pending</span></div></div><p class="panel-note">Approved leave automatically pauses inactivity strike time.</p></article>
+          <article id="shifts" class="panel live-panel"><div class="panel-heading"><div><span class="eyebrow">SHIFT TRACKING</span><h3>On duty now</h3></div><a href="#roster">Open roster <span>→</span></a></div><div id="duty-list" class="duty-list"><p class="panel-note">No published on-duty data.</p></div><button class="text-button" type="button">View full shift board <span>→</span></button></article>
+          <article id="leave" class="panel leave-panel"><div class="panel-heading"><div><span class="eyebrow">LEAVE OF ABSENCE</span><h3>Upcoming coverage</h3></div><button class="button-secondary compact" type="button">Open calendar</button></div><div id="leave-list"><p class="panel-note">No published leave data.</p></div><p class="panel-note">Approved leave automatically pauses inactivity strike time.</p></article>
         </section>
         <section id="roster" class="module-section"><div class="section-heading"><div><span class="eyebrow">WORKSPACE</span><h3>Roster operations</h3></div><button class="button-secondary compact" type="button">Manage modules</button></div>
           <div class="module-grid">
-            <a class="module-card enabled" href="#roster"><span class="module-icon gold">♙</span><span><strong>Roster</strong><small>Members, ranks, units, and duty status.</small><em>42 members</em></span><b>→</b></a>
-            <a class="module-card enabled" href="#shifts"><span class="module-icon blue-icon">◷</span><span><strong>Shift Tracking</strong><small>Live duty, logged time, and attendance.</small><em>3 on duty now</em></span><b>→</b></a>
-            <a class="module-card enabled" href="#leave"><span class="module-icon purple-icon">▣</span><span><strong>LOA Calendar</strong><small>Review requests and see who is away.</small><em>2 upcoming requests</em></span><b>→</b></a>
+            <a class="module-card enabled" href="#roster"><span class="module-icon gold">♙</span><span><strong>Roster</strong><small>Members, ranks, units, and duty status.</small><em>Awaiting data source</em></span><b>→</b></a>
+            <a class="module-card enabled" href="#shifts"><span class="module-icon blue-icon">◷</span><span><strong>Shift Tracking</strong><small>Live duty, logged time, and attendance.</small><em>Awaiting data source</em></span><b>→</b></a>
+            <a class="module-card enabled" href="#leave"><span class="module-icon purple-icon">▣</span><span><strong>LOA Calendar</strong><small>Review requests and see who is away.</small><em>Awaiting data source</em></span><b>→</b></a>
             <div class="module-card locked"><span class="module-icon">⌑</span><span><strong>Training</strong><small>Courses, ride-alongs, and qualifications.</small><em>Planned feature</em></span><b>🔒</b></div>
             <div class="module-card locked"><span class="module-icon">▤</span><span><strong>Documents</strong><small>SOPs, handbooks, and training documents.</small><em>Planned feature</em></span><b>🔒</b></div>
             <div class="module-card locked"><span class="module-icon">⌘</span><span><strong>Shift Handoff</strong><small>Open scenes, coverage needs, and notes.</small><em>Planned feature</em></span><b>🔒</b></div>
           </div></section>
-        <section id="activity" class="activity-section"><article class="panel activity-panel"><div class="panel-heading"><div><span class="eyebrow">AUDIT FEED</span><h3>Recent activity</h3></div><button class="text-button" type="button">View all <span>→</span></button></div><ol id="activity-list" class="activity-list">
-          <li><span class="activity-icon strike">!</span><div><strong>Attendance strike issued</strong><small>No clock-in recorded after the configured grace period.</small></div><time>18m</time></li>
-          <li><span class="activity-icon plus">+</span><div><strong>Nihlus Bane clocked in</strong><small>E-403 · Lakeside EMS</small></div><time>1h</time></li>
-          <li><span class="activity-icon leave-icon">▣</span><div><strong>Leave request approved</strong><small>Jenna Morgan · Sep 20–22</small></div><time>3h</time></li>
-        </ol></article></section>
+        <section id="activity" class="activity-section"><article class="panel activity-panel"><div class="panel-heading"><div><span class="eyebrow">AUDIT FEED</span><h3>Recent activity</h3></div><button class="text-button" type="button">View all <span>→</span></button></div><ol id="activity-list" class="activity-list"><li><span class="activity-icon leave-icon">▣</span><div><strong>No published activity</strong><small>Clock, leave, and attendance updates will appear after a verified snapshot is connected.</small></div><time>—</time></li></ol></article></section>
       </main>
     </div>
     <script src="app.js"></script>
   </body>
-+</html>
+</html>

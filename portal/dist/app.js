@@ -59,6 +59,10 @@ async function loadSnapshot() {
   renderSnapshot(snapshot);
 }
 
+function showNoSnapshotState() {
+  syncLabel.textContent = 'No operations snapshot published';
+}
+
 refreshButton?.addEventListener('click', async () => {
   refreshButton.disabled = true;
   refreshButton.textContent = '↻ Syncing';
@@ -66,14 +70,14 @@ refreshButton?.addEventListener('click', async () => {
   try {
     await loadSnapshot();
   } catch {
-    syncLabel.textContent = 'Snapshot unavailable — showing last loaded data';
+    showNoSnapshotState();
   } finally {
     refreshButton.disabled = false;
     refreshButton.textContent = '↻ Refresh';
   }
 });
 
-loadSnapshot().catch(() => { syncLabel.textContent = 'Snapshot unavailable — showing representative data'; });
+loadSnapshot().catch(showNoSnapshotState);
 
 document.querySelectorAll('.nav-link').forEach(link => {
   link.addEventListener('click', () => {
