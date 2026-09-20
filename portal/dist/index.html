@@ -3,49 +3,58 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#0d1117" />
+    <meta name="theme-color" content="#111c27" />
     <meta name="description" content="Lakeside Medical CAD operations portal" />
     <link rel="icon" type="image/svg+xml" href="favicon.svg" />
     <link rel="stylesheet" href="styles.css" />
-    <title>Lakeside Medical CAD Portal</title>
+    <title>Lakeside Medical CAD</title>
   </head>
   <body>
-    <div class="app-shell">
-      <aside class="sidebar" aria-label="Primary navigation">
-        <a class="brand" href="#dashboard" aria-label="Lakeside Medical CAD home"><span class="brand-mark">✚</span><span><strong>Lakeside</strong><small>Medical CAD</small></span></a>
-        <div class="portal-switcher"><span class="eyebrow">ACTIVE ROSTER</span><button class="switcher" type="button" aria-label="Select roster">Lakeside EMS <span>⌄</span></button></div>
-        <nav class="navigation">
-          <a class="nav-link active" href="#dashboard" data-view="Dashboard"><span>▦</span>Dashboard</a>
-          <a class="nav-link" href="#roster" data-view="Roster"><span>♙</span>Roster</a>
-          <a class="nav-link" href="#shifts" data-view="Shift Tracking"><span>◷</span>Shift Tracking</a>
-          <a class="nav-link" href="#leave" data-view="Leave Calendar"><span>▣</span>Leave Calendar</a>
-          <a class="nav-link" href="#activity" data-view="Activity"><span>ϟ</span>Activity</a>
+    <div class="cad-shell">
+      <aside class="sidebar" aria-label="CAD navigation">
+        <a class="brand" href="#personnel" aria-label="Lakeside Medical CAD home"><span class="brand-mark">✚</span><span><strong>LAKESIDE</strong><small>MEDICAL CAD</small></span></a>
+        <section class="roster-context"><span class="context-label">ACTIVE DEPARTMENT</span><button type="button" class="department-select">Lakeside EMS <span>⌄</span></button></section>
+        <nav class="nav-list">
+          <a href="#personnel" class="nav-link active"><span>⌂</span>Home</a>
+          <a href="#incident-status" class="nav-link"><span>◈</span>Calls <b>0</b></a>
+          <a href="#personnel" class="nav-link"><span>♙</span>Personnel</a>
+          <a href="#units" class="nav-link"><span>▦</span>Units</a>
+          <a href="#activity" class="nav-link"><span>◷</span>Shifts</a>
+          <a href="#activity" class="nav-link"><span>▤</span>Logs</a>
+          <a href="#leave" class="nav-link"><span>▣</span>Leave</a>
         </nav>
-        <div class="sidebar-footer"><div class="connection"><span></span>Discord connected</div><div class="profile"><span class="avatar avatar-admin">—</span><span><strong>Portal account</strong><small>Authentication pending</small></span><button aria-label="Account menu" type="button">⋮</button></div></div>
+        <div class="sidebar-spacer"></div>
+        <section class="connection-card"><span class="online-dot"></span><span><strong>DISCORD LINK</strong><small id="sidebar-sync">Awaiting snapshot</small></span></section>
+        <div class="profile"><span class="profile-mark">—</span><span><strong>Portal account</strong><small>Read-only access</small></span><button type="button" aria-label="Account options">⋮</button></div>
       </aside>
       <main>
-        <header class="topbar"><button class="mobile-menu" type="button" aria-label="Open navigation">☰</button><div><span class="eyebrow">OPERATIONS PORTAL</span><h1 id="page-title">Lakeside EMS</h1></div><div class="top-actions"><span class="sync-status"><i></i><span id="sync-label">No operations snapshot published</span></span><button id="refresh" class="button-secondary" type="button">↻ Refresh</button></div></header>
-        <section id="dashboard" class="dashboard-intro"><div><p class="eyebrow">LIVE OPERATIONS</p><h2>Duty at a glance.</h2><p class="muted">This read-only portal will show verified roster, shift, attendance, and approved leave data once a source is connected.</p></div><div class="view-toggle" aria-label="Portal view"><button class="selected" type="button">Manager</button><button type="button">My view</button></div></section>
-        <section class="metrics" aria-label="Roster metrics">
-          <article class="metric-card"><span class="metric-label">MEMBERS</span><strong data-metric="members">—</strong><span class="trend neutral" data-metric-detail="members">No snapshot published</span><span class="spark blue"></span></article>
-          <article class="metric-card"><span class="metric-label">ON SHIFT NOW</span><strong class="blue-text" data-metric="on-duty">—</strong><span class="trend" data-metric-detail="on-duty">No snapshot published</span><span class="spark yellow"></span></article>
-          <article class="metric-card"><span class="metric-label">ACTIVE STRIKES</span><strong class="danger-text" data-metric="strikes">—</strong><span class="trend" data-metric-detail="strikes">No snapshot published</span><span class="spark red"></span></article>
-          <article class="metric-card"><span class="metric-label">APPROVED LEAVE</span><strong class="purple-text" data-metric="leave">—</strong><span class="trend" data-metric-detail="leave">No snapshot published</span><span class="spark purple"></span></article>
+        <header class="topbar">
+          <div><p class="breadcrumb">Lakeside EMS <span>/</span> Personnel</p><h1>Personnel command</h1></div>
+          <div class="top-actions"><span class="cad-state"><i></i><span id="sync-label">No operations snapshot published</span></span><button id="refresh" class="refresh" type="button">↻ Refresh</button></div>
+        </header>
+        <section id="incident-status" class="incident-strip" aria-label="Incident status"><span class="incident-icon">!</span><div><strong>Incident feed not connected</strong><small>Calls and scene details will appear here when dispatch integration is enabled.</small></div><span class="incident-count">0 ACTIVE CALLS</span></section>
+        <section class="workspace">
+          <article id="personnel" class="command-panel">
+            <header class="panel-title"><div><p>PERSONNEL</p><h2>Unit status board</h2></div><span id="table-summary" class="panel-count">NO DATA</span></header>
+            <div class="table-wrap"><table><thead><tr><th>Unit</th><th>Responder</th><th>Department</th><th>Duty status</th><th>Elapsed</th></tr></thead><tbody id="duty-list"><tr class="empty-row"><td colspan="5">No published on-duty data.</td></tr></tbody></table></div>
+            <footer class="panel-footer"><span><i class="online-dot"></i>Live status from current clock records</span><span>Read-only view</span></footer>
+          </article>
+          <aside class="command-rail">
+            <section class="action-panel"><header><p>UNIT ACTIONS</p><h2>Response state</h2></header><button type="button" class="response responding" disabled>● Responding <span>⌄</span></button><button type="button" class="response not-responding" disabled>● Not responding</button><button type="button" class="response standing" disabled>● Standing by <span>⌄</span></button><button type="button" class="response on-scene" disabled>● On scene</button><p class="control-note">Dispatch commands are disabled in this read-only portal.</p></section>
+            <section class="staffing-panel"><header><p>STAFFING LEVEL</p><h2>Unit availability</h2></header><label for="staffing-note">Staffing note</label><textarea id="staffing-note" placeholder="No note available" disabled></textarea><select aria-label="Availability" disabled><option>Available</option></select><button type="button" class="set-staffing" disabled>Set staffing level</button></section>
+            <section class="department-info"><p>DEPARTMENT INFO</p><dl><div><dt>Department</dt><dd>Lakeside EMS</dd></div><div><dt>Portal mode</dt><dd>Read-only</dd></div><div><dt>Data source</dt><dd>Discord clock records</dd></div></dl></section>
+          </aside>
         </section>
-        <section class="content-grid">
-          <article id="shifts" class="panel live-panel"><div class="panel-heading"><div><span class="eyebrow">SHIFT TRACKING</span><h3>On duty now</h3></div><a href="#roster">Open roster <span>→</span></a></div><div id="duty-list" class="duty-list"><p class="panel-note">No published on-duty data.</p></div><button class="text-button" type="button">View full shift board <span>→</span></button></article>
-          <article id="leave" class="panel leave-panel"><div class="panel-heading"><div><span class="eyebrow">LEAVE OF ABSENCE</span><h3>Upcoming coverage</h3></div><button class="button-secondary compact" type="button">Open calendar</button></div><div id="leave-list"><p class="panel-note">No published leave data.</p></div><p class="panel-note">Approved leave automatically pauses inactivity strike time.</p></article>
+        <section id="units" class="summary-grid" aria-label="Operations summary">
+          <article><span>ON DUTY</span><strong data-metric="on-duty">—</strong><small data-metric-detail="on-duty">No snapshot published</small></article>
+          <article><span>ROSTER MEMBERS</span><strong data-metric="members">—</strong><small data-metric-detail="members">No snapshot published</small></article>
+          <article><span>ACTIVE STRIKES</span><strong class="danger" data-metric="strikes">—</strong><small data-metric-detail="strikes">No snapshot published</small></article>
+          <article><span>APPROVED LEAVE</span><strong class="purple" data-metric="leave">—</strong><small data-metric-detail="leave">No snapshot published</small></article>
         </section>
-        <section id="roster" class="module-section"><div class="section-heading"><div><span class="eyebrow">WORKSPACE</span><h3>Roster operations</h3></div><button class="button-secondary compact" type="button">Manage modules</button></div>
-          <div class="module-grid">
-            <a class="module-card enabled" href="#roster"><span class="module-icon gold">♙</span><span><strong>Roster</strong><small>Members, ranks, units, and duty status.</small><em>Awaiting data source</em></span><b>→</b></a>
-            <a class="module-card enabled" href="#shifts"><span class="module-icon blue-icon">◷</span><span><strong>Shift Tracking</strong><small>Live duty, logged time, and attendance.</small><em>Awaiting data source</em></span><b>→</b></a>
-            <a class="module-card enabled" href="#leave"><span class="module-icon purple-icon">▣</span><span><strong>LOA Calendar</strong><small>Review requests and see who is away.</small><em>Awaiting data source</em></span><b>→</b></a>
-            <div class="module-card locked"><span class="module-icon">⌑</span><span><strong>Training</strong><small>Courses, ride-alongs, and qualifications.</small><em>Planned feature</em></span><b>🔒</b></div>
-            <div class="module-card locked"><span class="module-icon">▤</span><span><strong>Documents</strong><small>SOPs, handbooks, and training documents.</small><em>Planned feature</em></span><b>🔒</b></div>
-            <div class="module-card locked"><span class="module-icon">⌘</span><span><strong>Shift Handoff</strong><small>Open scenes, coverage needs, and notes.</small><em>Planned feature</em></span><b>🔒</b></div>
-          </div></section>
-        <section id="activity" class="activity-section"><article class="panel activity-panel"><div class="panel-heading"><div><span class="eyebrow">AUDIT FEED</span><h3>Recent activity</h3></div><button class="text-button" type="button">View all <span>→</span></button></div><ol id="activity-list" class="activity-list"><li><span class="activity-icon leave-icon">▣</span><div><strong>No published activity</strong><small>Clock, leave, and attendance updates will appear after a verified snapshot is connected.</small></div><time>—</time></li></ol></article></section>
+        <section class="lower-grid">
+          <article id="activity" class="log-panel"><header class="panel-title"><div><p>OPERATIONS LOG</p><h2>Recent activity</h2></div><span class="panel-count">LIVE SNAPSHOT</span></header><ol id="activity-list" class="activity-list"><li class="empty-activity"><span>—</span><div><strong>No published activity</strong><small>Clock, leave, and attendance updates will appear when a verified snapshot is available.</small></div><time>—</time></li></ol></article>
+          <article id="leave" class="leave-panel"><header class="panel-title"><div><p>LEAVE CALENDAR</p><h2>Coverage outlook</h2></div></header><div id="leave-list"><p class="empty-copy">No published leave data.</p></div><p class="leave-footnote">Approved leave pauses inactivity-strike time.</p></article>
+        </section>
       </main>
     </div>
     <script src="app.js"></script>

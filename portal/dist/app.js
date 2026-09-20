@@ -1,6 +1,10 @@
 const refreshButton = document.querySelector('#refresh');
 const syncLabel = document.querySelector('#sync-label');
-const pageTitle = document.querySelector('#page-title');
+const sidebarSync = document.querySelector('#sidebar-sync');
+const dutyList = document.querySelector('#duty-list');
+const activityList = document.querySelector('#activity-list');
+const leaveList = document.querySelector('#leave-list');
+const tableSummary = document.querySelector('#table-summary');
 
 const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[character]));
 const dateFormatter = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' });
@@ -18,6 +22,11 @@ function relativeTime(isoDate) {
   return hours < 24 ? `${hours}h` : `${Math.floor(hours / 24)}d`;
 }
 
+function unitLabel(shift, index) {
+  const match = String(shift.department ?? '').match(/E-\d+/i);
+  return match?.[0].toUpperCase() ?? `UNIT ${String(index + 1).padStart(2, '0')}`;
+}
+
 function renderSnapshot(snapshot) {
   const { metrics, activeShifts, leaveRequests, activity } = snapshot;
   document.querySelector('[data-metric="members"]').textContent = metrics.members;
@@ -25,30 +34,31 @@ function renderSnapshot(snapshot) {
   document.querySelector('[data-metric="strikes"]').textContent = metrics.activeStrikes;
   document.querySelector('[data-metric="leave"]').textContent = metrics.approvedLeaveToday;
   document.querySelector('[data-metric-detail="members"]').textContent = 'Recorded roster members';
-  document.querySelector('[data-metric-detail="on-duty"]').textContent = `${metrics.weeklyHours.toFixed(1)}h this week`;
+  document.querySelector('[data-metric-detail="on-duty"]').textContent = `${metrics.weeklyHours.toFixed(1)}h logged this week`;
   document.querySelector('[data-metric-detail="strikes"]').textContent = 'Current total';
   document.querySelector('[data-metric-detail="leave"]').textContent = metrics.approvedLeaveToday ? 'Members away today' : 'No members away today';
 
-  const dutyList = document.querySelector('#duty-list');
+  tableSummary.textContent = activeShifts.length ? `${activeShifts.length} ACTIVE` : 'NO ACTIVE UNITS';
   dutyList.innerHTML = activeShifts.length ? activeShifts.map((shift, index) => `
-    <div class="duty-row"><span class="avatar ${['avatar-cyan', 'avatar-yellow', 'avatar-purple'][index % 3]}">${escapeHtml(shift.name.slice(0, 2).toUpperCase())}</span><div><strong>${escapeHtml(shift.name)}</strong><small>${escapeHtml(shift.department)}</small></div><time>${elapsedTime(shift.clockedInAt)}</time><span class="status-dot"></span></div>`).join('') : '<p class="panel-note">No members are currently clocked in.</p>';
+    <tr><td><span class="unit-tag">${escapeHtml(unitLabel(shift, index))}</span></td><td><strong>${escapeHtml(shift.name)}</strong></td><td>${escapeHtml(shift.department)}</td><td><span class="duty-state"><i></i>On duty</span></td><td class="mono">${elapsedTime(shift.clockedInAt)}</td></tr>`).join('') : '<tr class="empty-row"><td colspan="5">No members are currently clocked in.</td></tr>';
 
-  const leaveList = document.querySelector('#leave-list');
   leaveList.innerHTML = leaveRequests.length ? leaveRequests.slice(0, 4).map(request => {
-    const date = new Date(`${request.startDate}T12:00:00Z`);
+    const start = new Date(`${request.startDate}T12:00:00Z`);
+    const end = new Date(`${request.endDate}T12:00:00Z`);
     const status = request.status === 'approved' ? 'approved' : 'pending';
-    return `<div class="leave-date"><span class="date-box"><b>${date.getUTCDate()}</b><small>${date.toLocaleString('en-US', { month: 'short', timeZone: 'UTC' }).toUpperCase()}</small></span><div><strong>${escapeHtml(request.name)}</strong><small>${escapeHtml(status === 'approved' ? 'Approved leave' : 'Pending review')} · ${escapeHtml(dateFormatter.format(date))}–${escapeHtml(dateFormatter.format(new Date(`${request.endDate}T12:00:00Z`)))}</small></div><span class="pill ${status}">${status}</span></div>`;
-  }).join('') : '<p class="panel-note">No upcoming leave requests.</p>';
+    return `<div class="leave-row"><span class="leave-date"><b>${start.getUTCDate()}</b><small>${start.toLocaleString('en-US', { month: 'short', timeZone: 'UTC' }).toUpperCase()}</small></span><div><strong>${escapeHtml(request.name)}</strong><small>${escapeHtml(dateFormatter.format(start))} – ${escapeHtml(dateFormatter.format(end))}</small></div><span class="leave-status ${status}">${status}</span></div>`;
+  }).join('') : '<p class="empty-copy">No upcoming leave requests.</p>';
 
-  const activityList = document.querySelector('#activity-list');
   activityList.innerHTML = activity.length ? activity.slice(0, 6).map(entry => {
-    const cssClass = entry.type === 'strike' ? 'strike' : entry.type === 'leave' ? 'leave-icon' : 'plus';
-    const icon = entry.type === 'strike' ? '!' : entry.type === 'leave' ? '▣' : '+';
-    return `<li><span class="activity-icon ${cssClass}">${icon}</span><div><strong>${escapeHtml(entry.title)}</strong><small>${escapeHtml(entry.detail)}</small></div><time>${relativeTime(entry.at)}</time></li>`;
-  }).join('') : '<li><span class="activity-icon leave-icon">▣</span><div><strong>No recent activity</strong><small>The portal will list clock, leave, and attendance updates here.</small></div><time>—</time></li>';
+    const type = entry.type === 'strike' ? 'strike' : entry.type === 'leave' ? 'leave' : 'clock';
+    const icon = type === 'strike' ? '!' : type === 'leave' ? '▣' : '◷';
+    return `<li><span class="activity-icon ${type}">${icon}</span><div><strong>${escapeHtml(entry.title)}</strong><small>${escapeHtml(entry.detail)}</small></div><time>${relativeTime(entry.at)}</time></li>`;
+  }).join('') : '<li class="empty-activity"><span>—</span><div><strong>No recent activity</strong><small>The next verified clock, leave, or attendance update will appear here.</small></div><time>—</time></li>';
 
   const generated = new Date(snapshot.generatedAt);
-  syncLabel.textContent = `Snapshot ${new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' }).format(generated)}`;
+  const formatted = new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' }).format(generated);
+  syncLabel.textContent = `Snapshot ${formatted}`;
+  sidebarSync.textContent = `Snapshot ${formatted}`;
 }
 
 async function loadSnapshot() {
@@ -61,17 +71,14 @@ async function loadSnapshot() {
 
 function showNoSnapshotState() {
   syncLabel.textContent = 'No operations snapshot published';
+  sidebarSync.textContent = 'Awaiting snapshot';
 }
 
 refreshButton?.addEventListener('click', async () => {
   refreshButton.disabled = true;
   refreshButton.textContent = '↻ Syncing';
-  syncLabel.textContent = 'Refreshing portal snapshot';
-  try {
-    await loadSnapshot();
-  } catch {
-    showNoSnapshotState();
-  } finally {
+  syncLabel.textContent = 'Refreshing snapshot';
+  try { await loadSnapshot(); } catch { showNoSnapshotState(); } finally {
     refreshButton.disabled = false;
     refreshButton.textContent = '↻ Refresh';
   }
@@ -83,13 +90,5 @@ document.querySelectorAll('.nav-link').forEach(link => {
   link.addEventListener('click', () => {
     document.querySelector('.nav-link.active')?.classList.remove('active');
     link.classList.add('active');
-    pageTitle.textContent = link.dataset.view === 'Dashboard' ? 'Lakeside EMS' : link.dataset.view;
-  });
-});
-
-document.querySelectorAll('.view-toggle button').forEach(button => {
-  button.addEventListener('click', () => {
-    document.querySelector('.view-toggle .selected')?.classList.remove('selected');
-    button.classList.add('selected');
   });
 });
