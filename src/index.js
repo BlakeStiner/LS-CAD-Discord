@@ -9,6 +9,7 @@ const {
   EmbedBuilder,
   Events,
   GatewayIntentBits,
+  MessageFlags,
   PermissionFlagsBits,
   REST,
   Routes,
@@ -30,8 +31,11 @@ client.on(Events.Error, error => {
   console.error('Discord client error:', error);
 });
 const panelMoves = new Map();
+const panelMoveTimers = new Map();
 const rosterRefreshes = new Map();
 let shiftReminderCheckRunning = false;
+const PANEL_REPOST_DELAY_MS = 6000;
+const PANEL_RETIRE_DELAY_MS = 15000;
 const ROSTER_OPTIONS = [
   'Lakeside EMS',
   'Lakeside Police Department',
@@ -140,11 +144,30 @@ function panelPayload() {
 
 function isClockPanel(message) {
   return message.author?.id === client.user?.id
-    && message.components.some(row => row.components.some(component => component.customId === 'clock:in'));
+    && message.components?.some(row => row.components.some(component => component.customId === 'clock:in'));
 }
 
-// Send and persist the replacement before touching any existing panel. This keeps
-// the clock usable even if Discord rejects a send or a later cleanup operation.
+function retiredPanelPayload() {
+  return {
+    embeds: [new EmbedBuilder()
+      .setColor(0x95a5a6)
+      .setTitle('Lakeside Medical • Shift Clock')
+      .setDescription('This clock panel has moved to the newest message below.')
+      .setFooter({ text: 'Use the current Shift Clock panel to start or finish duty.' })],
+    components: [],
+  };
+}
+
+async function retirePanel(panel) {
+  await panel.edit(retiredPanelPayload()).catch(error => console.error(`Could not disable stale clock panel ${panel.id}:`, error));
+  const timer = setTimeout(() => {
+    panel.delete().catch(error => console.error(`Could not remove stale clock panel ${panel.id}:`, error));
+  }, PANEL_RETIRE_DELAY_MS);
+  timer.unref?.();
+}
+
+// The replacement is persisted before prior controls are disabled, so the newest
+// panel is always available before an older panel is retired.
 async function publishFreshPanel(guild, channel) {
   const guildData = store.guild(guild.id);
   const panel = await channel.send(panelPayload());
@@ -155,27 +178,55 @@ async function publishFreshPanel(guild, channel) {
   const recentMessages = await channel.messages.fetch({ limit: 100 }).catch(() => null);
   if (recentMessages) {
     const stalePanels = recentMessages.filter(message => message.id !== panel.id && isClockPanel(message));
-    for (const stalePanel of stalePanels.values()) {
-      await stalePanel.delete().catch(error => console.error(`Could not remove stale clock panel ${stalePanel.id}:`, error));
-    }
+    for (const stalePanel of stalePanels.values()) await retirePanel(stalePanel);
   }
   return panel;
 }
 
+// A restart should preserve the existing current panel. Only publish when the
+// configured panel is missing, rather than invalidating a visible control.
 async function ensurePanel(guild, channel) {
+  const guildData = store.guild(guild.id);
+  const configuredPanel = guildData.panelMessageId
+    ? await channel.messages.fetch(guildData.panelMessageId).catch(() => null)
+    : null;
+  if (configuredPanel && isClockPanel(configuredPanel)) return configuredPanel;
+
+  const recentMessages = await channel.messages.fetch({ limit: 100 }).catch(() => null);
+  const newestPanel = recentMessages
+    ? [...recentMessages.values()].filter(isClockPanel).sort((first, second) => second.createdTimestamp - first.createdTimestamp)[0]
+    : null;
+  if (newestPanel) {
+    guildData.panelMessageId = newestPanel.id;
+    guildData.clockChannelId = channel.id;
+    store.save();
+    return newestPanel;
+  }
   return publishFreshPanel(guild, channel);
 }
 
-// Discord messages cannot be repositioned. Reposting our one control message after
-// activity is the only way to keep it at the bottom of a live clock channel.
+// Discord cannot pin a message to the bottom of a feed. Wait for a short quiet
+// period before reposting, rather than deleting the panel for every message.
+function schedulePanelMove(guild) {
+  if (!store.guild(guild.id).clockChannelId) return;
+  const existingTimer = panelMoveTimers.get(guild.id);
+  if (existingTimer) clearTimeout(existingTimer);
+  const timer = setTimeout(() => {
+    panelMoveTimers.delete(guild.id);
+    movePanelToBottom(guild).catch(error => console.error(`Could not move clock panel for ${guild.id}:`, error));
+  }, PANEL_REPOST_DELAY_MS);
+  timer.unref?.();
+  panelMoveTimers.set(guild.id, timer);
+}
+
 async function movePanelToBottom(guild) {
   if (panelMoves.has(guild.id)) return panelMoves.get(guild.id);
   const work = (async () => {
-  const guildData = store.guild(guild.id);
-  if (!guildData.clockChannelId) return;
-  const channel = await guild.channels.fetch(guildData.clockChannelId).catch(() => null);
-  if (!channel?.isTextBased()) return;
-  await publishFreshPanel(guild, channel);
+    const guildData = store.guild(guild.id);
+    if (!guildData.clockChannelId) return;
+    const channel = await guild.channels.fetch(guildData.clockChannelId).catch(() => null);
+    if (!channel?.isTextBased()) return;
+    await publishFreshPanel(guild, channel);
   })();
   panelMoves.set(guild.id, work);
   try {
@@ -184,7 +235,6 @@ async function movePanelToBottom(guild) {
     panelMoves.delete(guild.id);
   }
 }
-
 async function sendClockLog(guild, embed) {
   const guildData = store.guild(guild.id);
   if (!guildData.clockChannelId) return;
@@ -455,7 +505,7 @@ client.on(Events.InteractionCreate, async interaction => {
       if (interaction.commandName === 'clock-panel') {
         const channel = interaction.options.getChannel('channel') ?? interaction.channel;
         if (!channel?.isTextBased() || channel.isDMBased()) return interaction.reply({ content: 'Choose a server text channel for the clock panel.', ephemeral: true });
-        await ensurePanel(interaction.guild, channel);
+        await publishFreshPanel(interaction.guild, channel);
         return interaction.reply({ content: `Clock panel is ready in ${channel}.`, ephemeral: true });
       }
       if (interaction.commandName === 'duty-roster') {
@@ -675,36 +725,41 @@ client.on(Events.InteractionCreate, async interaction => {
     if (interaction.isButton()) {
       const record = store.member(interaction.guildId, interaction.user.id);
       if (interaction.customId === 'clock:in') {
-        if (record.activeShift) return interaction.reply({ content: `You are already clocked in for **${record.activeShift.department}** since ${timestamp(record.activeShift.start)}.`, ephemeral: true });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        if (record.activeShift) return interaction.editReply({ content: `You are already clocked in for **${record.activeShift.department}** since ${timestamp(record.activeShift.start)}.` });
         const rosterSelect = new StringSelectMenuBuilder()
           .setCustomId('clock:roster')
           .setPlaceholder('Select your roster')
           .addOptions(ROSTER_OPTIONS.map(roster => ({ label: roster, value: roster })));
-        return interaction.reply({
+        return interaction.editReply({
           content: 'Select the roster you are starting a shift for.',
           components: [new ActionRowBuilder().addComponents(rosterSelect)],
-          ephemeral: true,
         });
       }
       if (interaction.customId === 'clock:out') {
-        if (!record.activeShift) return interaction.reply({ content: 'You are not currently clocked in.', ephemeral: true });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        if (!record.activeShift) return interaction.editReply({ content: 'You are not currently clocked in.' });
         const end = new Date().toISOString();
         const shift = ensureShiftMetadata({ ...record.activeShift, end });
         shift.audit.push({ at: end, action: 'clocked-out', by: interaction.user.id });
         record.shifts.push(shift);
         record.activeShift = null;
         store.save();
-        await interaction.reply({ content: `Clocked out of **${shift.department}**. Shift duration: **${duration(new Date(end) - new Date(shift.start))}**.`, ephemeral: true });
+        await interaction.editReply({ content: `Clocked out of **${shift.department}**. Shift duration: **${duration(new Date(end) - new Date(shift.start))}**.` });
         await sendClockLog(interaction.guild, new EmbedBuilder().setColor(0xe74c3c).setTitle('Shift completed').setDescription(`${interaction.user} clocked out of **${shift.department}**.`).addFields({ name: 'Started', value: timestamp(shift.start), inline: true }, { name: 'Duration', value: duration(new Date(end) - new Date(shift.start)), inline: true }).setTimestamp());
         await refreshDutyRoster(interaction.guild);
         return;
       }
-      if (interaction.customId === 'clock:status') return interaction.reply({ embeds: [statusEmbed(interaction.user, record)], ephemeral: true });
+      if (interaction.customId === 'clock:status') {
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        return interaction.editReply({ embeds: [statusEmbed(interaction.user, record)] });
+      }
     }
 
     if (interaction.isStringSelectMenu() && interaction.customId === 'clock:roster') {
+      await interaction.deferUpdate();
       const record = store.member(interaction.guildId, interaction.user.id);
-      if (record.activeShift) return interaction.reply({ content: 'You already have an active shift.', ephemeral: true });
+      if (record.activeShift) return interaction.editReply({ content: 'You already have an active shift.', components: [] });
       const department = interaction.values[0];
       const start = new Date().toISOString();
       record.activeShift = {
@@ -718,7 +773,7 @@ client.on(Events.InteractionCreate, async interaction => {
       record.lastClockIn = start;
       record.lastInactivityStrikeWeek = 0;
       store.save();
-      await interaction.update({ content: `Clocked in for **${department}** at ${timestamp(start)}.`, components: [] });
+      await interaction.editReply({ content: `Clocked in for **${department}** at ${timestamp(start)}.`, components: [] });
       await sendClockLog(interaction.guild, new EmbedBuilder().setColor(0x2ecc71).setTitle('Shift started').setDescription(`${interaction.user} clocked in for **${department}**.`).addFields({ name: 'Started', value: timestamp(start), inline: true }).setTimestamp());
       await refreshDutyRoster(interaction.guild);
     }
@@ -738,7 +793,7 @@ client.on(Events.MessageCreate, async message => {
   if (!message.guild || message.author.bot) return;
   const guildData = store.guild(message.guild.id);
   if (message.channelId !== guildData.clockChannelId) return;
-  await movePanelToBottom(message.guild).catch(error => console.error('Could not reposition clock panel:', error));
+  schedulePanelMove(message.guild);
 });
 
 client.login(DISCORD_TOKEN);
