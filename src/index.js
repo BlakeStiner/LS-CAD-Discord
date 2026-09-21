@@ -9,6 +9,7 @@ const {
   EmbedBuilder,
   Events,
   GatewayIntentBits,
+  MessageFlags,
   PermissionFlagsBits,
   REST,
   Routes,
@@ -16,6 +17,7 @@ const {
 } = require('discord.js');
 const commands = require('./commands');
 const store = require('./store');
+const { writePortalSnapshot, publishPortalSnapshot } = require('./portal-export');
 
 const { DISCORD_TOKEN, DISCORD_CLIENT_ID, DISCORD_GUILD_ID } = process.env;
 if (!DISCORD_TOKEN || !DISCORD_CLIENT_ID) {
@@ -25,10 +27,16 @@ if (!DISCORD_TOKEN || !DISCORD_CLIENT_ID) {
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildMessages],
 });
+client.on(Events.Error, error => {
+  console.error('Discord client error:', error);
+});
 const panelMoves = new Map();
+const panelMoveTimers = new Map();
 const rosterRefreshes = new Map();
 const unitRosterRefreshes = new Map();
 let shiftReminderCheckRunning = false;
+const PANEL_REPOST_DELAY_MS = 6000;
+const PANEL_RETIRE_DELAY_MS = 15000;
 const ROSTER_OPTIONS = [
   'Lakeside EMS',
   'Lakeside Police Department',
@@ -75,6 +83,46 @@ function parseIsoDate(value, label) {
   return parsed.toISOString();
 }
 
+function parseLeaveDate(value, label) {
+  const normalized = value.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) throw new Error(`${label} must use YYYY-MM-DD.`);
+  const parsed = new Date(`${normalized}T00:00:00.000Z`);
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== normalized) throw new Error(`${label} is not a valid calendar date.`);
+  return normalized;
+}
+
+function leaveRange(request) {
+  return {
+    start: new Date(`${request.startDate}T00:00:00.000Z`).getTime(),
+    end: new Date(`${request.endDate}T23:59:59.999Z`).getTime(),
+  };
+}
+
+function leaveRequestReference(request) {
+  return request.id.slice(0, 8);
+}
+
+function findLeaveRequest(requests, memberId, reference) {
+  const normalized = reference.trim().toLowerCase();
+  const matches = requests.filter(request => request.memberId === memberId && request.id.toLowerCase().startsWith(normalized));
+  return matches.length === 1 ? matches[0] : null;
+}
+
+function leavesOverlap(first, second) {
+  const firstRange = leaveRange(first);
+  const secondRange = leaveRange(second);
+  return firstRange.start <= secondRange.end && secondRange.start <= firstRange.end;
+}
+
+function approvedLeaveMilliseconds(requests, memberId, baseline, now) {
+  return requests
+    .filter(request => request.memberId === memberId && request.status === 'approved')
+    .reduce((total, request) => {
+      const range = leaveRange(request);
+      return total + Math.max(0, Math.min(now, range.end) - Math.max(baseline, range.start));
+    }, 0);
+}
+
 function panelPayload() {
   const embed = new EmbedBuilder()
     .setColor(0x2ecc71)
@@ -98,11 +146,30 @@ function panelPayload() {
 
 function isClockPanel(message) {
   return message.author?.id === client.user?.id
-    && message.components.some(row => row.components.some(component => component.customId === 'clock:in'));
+    && message.components?.some(row => row.components.some(component => component.customId === 'clock:in'));
 }
 
-// Send and persist the replacement before touching any existing panel. This keeps
-// the clock usable even if Discord rejects a send or a later cleanup operation.
+function retiredPanelPayload() {
+  return {
+    embeds: [new EmbedBuilder()
+      .setColor(0x95a5a6)
+      .setTitle('Lakeside Medical • Shift Clock')
+      .setDescription('This clock panel has moved to the newest message below.')
+      .setFooter({ text: 'Use the current Shift Clock panel to start or finish duty.' })],
+    components: [],
+  };
+}
+
+async function retirePanel(panel) {
+  await panel.edit(retiredPanelPayload()).catch(error => console.error(`Could not disable stale clock panel ${panel.id}:`, error));
+  const timer = setTimeout(() => {
+    panel.delete().catch(error => console.error(`Could not remove stale clock panel ${panel.id}:`, error));
+  }, PANEL_RETIRE_DELAY_MS);
+  timer.unref?.();
+}
+
+// The replacement is persisted before prior controls are disabled, so the newest
+// panel is always available before an older panel is retired.
 async function publishFreshPanel(guild, channel) {
   const guildData = store.guild(guild.id);
   const panel = await channel.send(panelPayload());
@@ -113,27 +180,55 @@ async function publishFreshPanel(guild, channel) {
   const recentMessages = await channel.messages.fetch({ limit: 100 }).catch(() => null);
   if (recentMessages) {
     const stalePanels = recentMessages.filter(message => message.id !== panel.id && isClockPanel(message));
-    for (const stalePanel of stalePanels.values()) {
-      await stalePanel.delete().catch(error => console.error(`Could not remove stale clock panel ${stalePanel.id}:`, error));
-    }
+    for (const stalePanel of stalePanels.values()) await retirePanel(stalePanel);
   }
   return panel;
 }
 
+// A restart should preserve the existing current panel. Only publish when the
+// configured panel is missing, rather than invalidating a visible control.
 async function ensurePanel(guild, channel) {
+  const guildData = store.guild(guild.id);
+  const configuredPanel = guildData.panelMessageId
+    ? await channel.messages.fetch(guildData.panelMessageId).catch(() => null)
+    : null;
+  if (configuredPanel && isClockPanel(configuredPanel)) return configuredPanel;
+
+  const recentMessages = await channel.messages.fetch({ limit: 100 }).catch(() => null);
+  const newestPanel = recentMessages
+    ? [...recentMessages.values()].filter(isClockPanel).sort((first, second) => second.createdTimestamp - first.createdTimestamp)[0]
+    : null;
+  if (newestPanel) {
+    guildData.panelMessageId = newestPanel.id;
+    guildData.clockChannelId = channel.id;
+    store.save();
+    return newestPanel;
+  }
   return publishFreshPanel(guild, channel);
 }
 
-// Discord messages cannot be repositioned. Reposting our one control message after
-// activity is the only way to keep it at the bottom of a live clock channel.
+// Discord cannot pin a message to the bottom of a feed. Wait for a short quiet
+// period before reposting, rather than deleting the panel for every message.
+function schedulePanelMove(guild) {
+  if (!store.guild(guild.id).clockChannelId) return;
+  const existingTimer = panelMoveTimers.get(guild.id);
+  if (existingTimer) clearTimeout(existingTimer);
+  const timer = setTimeout(() => {
+    panelMoveTimers.delete(guild.id);
+    movePanelToBottom(guild).catch(error => console.error(`Could not move clock panel for ${guild.id}:`, error));
+  }, PANEL_REPOST_DELAY_MS);
+  timer.unref?.();
+  panelMoveTimers.set(guild.id, timer);
+}
+
 async function movePanelToBottom(guild) {
   if (panelMoves.has(guild.id)) return panelMoves.get(guild.id);
   const work = (async () => {
-  const guildData = store.guild(guild.id);
-  if (!guildData.clockChannelId) return;
-  const channel = await guild.channels.fetch(guildData.clockChannelId).catch(() => null);
-  if (!channel?.isTextBased()) return;
-  await publishFreshPanel(guild, channel);
+    const guildData = store.guild(guild.id);
+    if (!guildData.clockChannelId) return;
+    const channel = await guild.channels.fetch(guildData.clockChannelId).catch(() => null);
+    if (!channel?.isTextBased()) return;
+    await publishFreshPanel(guild, channel);
   })();
   panelMoves.set(guild.id, work);
   try {
@@ -142,7 +237,6 @@ async function movePanelToBottom(guild) {
     panelMoves.delete(guild.id);
   }
 }
-
 async function sendClockLog(guild, embed) {
   const guildData = store.guild(guild.id);
   if (!guildData.clockChannelId) return;
@@ -235,6 +329,16 @@ async function refreshAllDutyRosters() {
   for (const guildId of Object.keys(store.data().guilds)) {
     const guild = await client.guilds.fetch(guildId).catch(() => null);
     if (guild) await refreshDutyRoster(guild).catch(error => console.error(`Could not refresh duty roster for ${guildId}:`, error));
+  }
+}
+
+async function refreshAllPortalSnapshots() {
+  for (const guildId of Object.keys(store.data().guilds)) {
+    const guild = await client.guilds.fetch(guildId).catch(() => null);
+    if (guild) {
+      const snapshot = writePortalSnapshot(guild);
+      await publishPortalSnapshot(snapshot);
+    }
   }
 }
 
@@ -333,14 +437,15 @@ async function checkInactivity() {
         discordMember?.joinedTimestamp ?? 0,
       );
       if (!baseline) continue;
-      const elapsed = now - baseline;
+      const approvedLeaveMs = approvedLeaveMilliseconds(guildData.leaveRequests, memberId, baseline, now);
+      const elapsed = Math.max(0, now - baseline - approvedLeaveMs);
       const gracePeriod = guildData.inactivityDays * 24 * 60 * 60 * 1000;
       const expectedStrikes = elapsed < gracePeriod ? 0 : 1 + Math.floor((elapsed - gracePeriod) / (7 * 24 * 60 * 60 * 1000));
       const strikesToAdd = expectedStrikes - record.lastInactivityStrikeWeek;
       if (strikesToAdd <= 0) continue;
       record.strikes += strikesToAdd;
       record.lastInactivityStrikeWeek = expectedStrikes;
-      record.strikeHistory.push({ at: new Date().toISOString(), delta: strikesToAdd, reason: `No clock-in since ${new Date(baseline).toISOString()}` });
+      record.strikeHistory.push({ at: new Date().toISOString(), delta: strikesToAdd, reason: `No clock-in since ${new Date(baseline).toISOString()}; approved leave excluded` });
       await sendClockLog(guild, new EmbedBuilder().setColor(0xe74c3c).setTitle('Attendance strike issued').setDescription(`${discordMember ?? `<@${memberId}>`} received **${strikesToAdd}** inactivity strike${strikesToAdd === 1 ? '' : 's'}.`).addFields({ name: 'Last clock-in', value: timestamp(baseline), inline: true }, { name: 'Current strike count', value: String(record.strikes), inline: true }).setTimestamp());
       store.save();
     }
@@ -445,10 +550,16 @@ client.once(Events.ClientReady, async readyClient => {
   await checkInactivity();
   await checkShiftReminders();
   await refreshAllDutyRosters();
+  for (const guildId of Object.keys(store.data().guilds)) {
+    const guild = await readyClient.guilds.fetch(guildId).catch(() => null);
+    if (guild) await guild.members.fetch().catch(() => null);
+  }
+  await refreshAllPortalSnapshots();
   await refreshAllUnitRosters();
   setInterval(checkInactivity, 60 * 60 * 1000);
   setInterval(checkShiftReminders, 60 * 1000);
   setInterval(refreshAllDutyRosters, 5 * 60 * 1000);
+  setInterval(refreshAllPortalSnapshots, 60 * 1000);
   setInterval(refreshAllUnitRosters, 5 * 60 * 1000);
 });
 
@@ -460,7 +571,7 @@ client.on(Events.InteractionCreate, async interaction => {
       if (interaction.commandName === 'clock-panel') {
         const channel = interaction.options.getChannel('channel') ?? interaction.channel;
         if (!channel?.isTextBased() || channel.isDMBased()) return interaction.reply({ content: 'Choose a server text channel for the clock panel.', ephemeral: true });
-        await ensurePanel(interaction.guild, channel);
+        await publishFreshPanel(interaction.guild, channel);
         return interaction.reply({ content: `Clock panel is ready in ${channel}.`, ephemeral: true });
       }
       if (interaction.commandName === 'duty-roster') {
@@ -471,6 +582,19 @@ client.on(Events.InteractionCreate, async interaction => {
         store.save();
         await refreshDutyRoster(interaction.guild);
         return interaction.reply({ content: `Live duty roster is ready in ${channel}.`, ephemeral: true });
+      }
+      if (interaction.commandName === 'clock-config') {
+        const trackedRole = interaction.options.getRole('tracked-role');
+        const inactivityDays = interaction.options.getInteger('inactivity-days');
+        if (trackedRole) {
+          const changedRole = guildData.trackedRoleId !== trackedRole.id;
+          guildData.trackedRoleId = trackedRole.id;
+          if (changedRole || !guildData.enforcementStartedAt) guildData.enforcementStartedAt = new Date().toISOString();
+        }
+        if (inactivityDays) guildData.inactivityDays = inactivityDays;
+        store.save();
+        await refreshDutyRoster(interaction.guild);
+        return interaction.reply({ content: `Attendance checks: **${guildData.inactivityDays} day(s)**. Tracking role: ${guildData.trackedRoleId ? `<@&${guildData.trackedRoleId}>` : 'members with clock history only'}.`, ephemeral: true });
       }
       if (interaction.commandName === 'unit-roster') {
         const channel = interaction.options.getChannel('channel') ?? interaction.channel;
@@ -517,6 +641,98 @@ client.on(Events.InteractionCreate, async interaction => {
         store.save();
         await refreshDutyRoster(interaction.guild);
         return interaction.reply({ content: `Attendance checks: **${guildData.inactivityDays} day(s)**. Tracking role: ${guildData.trackedRoleId ? `<@&${guildData.trackedRoleId}>` : 'members with clock history only'}.`, ephemeral: true });
+      }
+      if (interaction.commandName === 'loa-request') {
+        const reason = interaction.options.getString('reason', true).trim();
+        let startDate;
+        let endDate;
+        try {
+          startDate = parseLeaveDate(interaction.options.getString('start-date', true), 'Start date');
+          endDate = parseLeaveDate(interaction.options.getString('end-date', true), 'End date');
+        } catch (error) {
+          return interaction.reply({ content: error.message, ephemeral: true });
+        }
+        if (endDate < startDate) return interaction.reply({ content: 'The end date must be on or after the start date.', ephemeral: true });
+        const request = {
+          id: randomUUID(),
+          memberId: interaction.user.id,
+          startDate,
+          endDate,
+          reason,
+          status: 'pending',
+          requestedAt: new Date().toISOString(),
+          reviewedAt: null,
+          reviewedBy: null,
+          reviewNote: null,
+        };
+        const conflictingRequest = guildData.leaveRequests.find(existing => existing.memberId === request.memberId && existing.status !== 'declined' && leavesOverlap(existing, request));
+        if (conflictingRequest) {
+          return interaction.reply({ content: `You already have a **${conflictingRequest.status}** leave request (\`${leaveRequestReference(conflictingRequest)}\`) that overlaps those dates.`, ephemeral: true });
+        }
+        guildData.leaveRequests.push(request);
+        store.save();
+        return interaction.reply({ embeds: [new EmbedBuilder()
+          .setColor(0xf1c40f)
+          .setTitle('Leave request submitted')
+          .setDescription('Your request is pending manager review.')
+          .addFields(
+            { name: 'Request ID', value: `\`${leaveRequestReference(request)}\``, inline: true },
+            { name: 'Leave dates', value: `${request.startDate} through ${request.endDate}`, inline: true },
+            { name: 'Reason', value: reason, inline: false },
+          )
+          .setTimestamp()], ephemeral: true });
+      }
+      if (interaction.commandName === 'loa-status') {
+        const user = interaction.options.getUser('member') ?? interaction.user;
+        const requests = guildData.leaveRequests
+          .filter(request => request.memberId === user.id)
+          .sort((first, second) => second.requestedAt.localeCompare(first.requestedAt));
+        if (!requests.length) return interaction.reply({ content: `${user} has no recorded leave-of-absence requests.`, ephemeral: true });
+        const canViewReasons = user.id === interaction.user.id || interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild);
+        const fields = requests.slice(0, 10).map(request => ({
+          name: `\`${leaveRequestReference(request)}\` — ${request.status}`,
+          value: `${request.startDate} through ${request.endDate}${canViewReasons ? `\nReason: ${request.reason}` : ''}${request.reviewNote && canViewReasons ? `\nReview note: ${request.reviewNote}` : ''}`,
+          inline: false,
+        }));
+        return interaction.reply({ embeds: [new EmbedBuilder()
+          .setColor(0x5865f2)
+          .setTitle(`${user.username}'s leave requests`)
+          .setDescription(requests.length > 10 ? `Showing the 10 most recent of ${requests.length} requests.` : 'Date ranges are inclusive.')
+          .addFields(fields)
+          .setTimestamp()], ephemeral: true });
+      }
+      if (interaction.commandName === 'loa-review') {
+        const user = interaction.options.getUser('member', true);
+        const request = findLeaveRequest(guildData.leaveRequests, user.id, interaction.options.getString('request-id', true));
+        if (!request) return interaction.reply({ content: 'No unique leave request matched that member and ID. Use the short ID shown by `/loa-status`.', ephemeral: true });
+        if (request.status !== 'pending') return interaction.reply({ content: `Leave request \`${leaveRequestReference(request)}\` is already **${request.status}**.`, ephemeral: true });
+        const decision = interaction.options.getString('decision', true);
+        if (decision === 'approved') {
+          const overlap = guildData.leaveRequests.find(existing => existing.id !== request.id && existing.memberId === user.id && existing.status === 'approved' && leavesOverlap(existing, request));
+          if (overlap) return interaction.reply({ content: `This overlaps approved leave request \`${leaveRequestReference(overlap)}\`. Decline or adjust one of the requests first.`, ephemeral: true });
+        }
+        const note = interaction.options.getString('note')?.trim() || null;
+        request.status = decision;
+        request.reviewedAt = new Date().toISOString();
+        request.reviewedBy = interaction.user.id;
+        request.reviewNote = note;
+        store.save();
+        const color = decision === 'approved' ? 0x2ecc71 : 0xe74c3c;
+        const decisionLabel = decision === 'approved' ? 'approved' : 'declined';
+        await interaction.reply({ content: `Leave request \`${leaveRequestReference(request)}\` for ${user} was **${decisionLabel}**.`, ephemeral: true });
+        await user.send({ embeds: [new EmbedBuilder()
+          .setColor(color)
+          .setTitle(`Leave request ${decisionLabel}`)
+          .setDescription(`Your leave request for **${request.startDate} through ${request.endDate}** was ${decisionLabel}.`)
+          .addFields(note ? { name: 'Review note', value: note, inline: false } : { name: 'Review note', value: 'No note provided.', inline: false })
+          .setTimestamp()] }).catch(() => null);
+        await sendClockLog(interaction.guild, new EmbedBuilder()
+          .setColor(color)
+          .setTitle(`Leave request ${decisionLabel}`)
+          .setDescription(`${user}'s leave request was ${decisionLabel}.`)
+          .addFields({ name: 'Leave dates', value: `${request.startDate} through ${request.endDate}`, inline: true }, { name: 'Reviewed by', value: `${interaction.user}`, inline: true })
+          .setTimestamp());
+        return;
       }
       if (interaction.commandName === 'clock-status') {
         const user = interaction.options.getUser('member') ?? interaction.user;
@@ -621,36 +837,41 @@ client.on(Events.InteractionCreate, async interaction => {
     if (interaction.isButton()) {
       const record = store.member(interaction.guildId, interaction.user.id);
       if (interaction.customId === 'clock:in') {
-        if (record.activeShift) return interaction.reply({ content: `You are already clocked in for **${record.activeShift.department}** since ${timestamp(record.activeShift.start)}.`, ephemeral: true });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        if (record.activeShift) return interaction.editReply({ content: `You are already clocked in for **${record.activeShift.department}** since ${timestamp(record.activeShift.start)}.` });
         const rosterSelect = new StringSelectMenuBuilder()
           .setCustomId('clock:roster')
           .setPlaceholder('Select your roster')
           .addOptions(ROSTER_OPTIONS.map(roster => ({ label: roster, value: roster })));
-        return interaction.reply({
+        return interaction.editReply({
           content: 'Select the roster you are starting a shift for.',
           components: [new ActionRowBuilder().addComponents(rosterSelect)],
-          ephemeral: true,
         });
       }
       if (interaction.customId === 'clock:out') {
-        if (!record.activeShift) return interaction.reply({ content: 'You are not currently clocked in.', ephemeral: true });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        if (!record.activeShift) return interaction.editReply({ content: 'You are not currently clocked in.' });
         const end = new Date().toISOString();
         const shift = ensureShiftMetadata({ ...record.activeShift, end });
         shift.audit.push({ at: end, action: 'clocked-out', by: interaction.user.id });
         record.shifts.push(shift);
         record.activeShift = null;
         store.save();
-        await interaction.reply({ content: `Clocked out of **${shift.department}**. Shift duration: **${duration(new Date(end) - new Date(shift.start))}**.`, ephemeral: true });
+        await interaction.editReply({ content: `Clocked out of **${shift.department}**. Shift duration: **${duration(new Date(end) - new Date(shift.start))}**.` });
         await sendClockLog(interaction.guild, new EmbedBuilder().setColor(0xe74c3c).setTitle('Shift completed').setDescription(`${interaction.user} clocked out of **${shift.department}**.`).addFields({ name: 'Started', value: timestamp(shift.start), inline: true }, { name: 'Duration', value: duration(new Date(end) - new Date(shift.start)), inline: true }).setTimestamp());
         await refreshDutyRoster(interaction.guild);
         return;
       }
-      if (interaction.customId === 'clock:status') return interaction.reply({ embeds: [statusEmbed(interaction.user, record)], ephemeral: true });
+      if (interaction.customId === 'clock:status') {
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        return interaction.editReply({ embeds: [statusEmbed(interaction.user, record)] });
+      }
     }
 
     if (interaction.isStringSelectMenu() && interaction.customId === 'clock:roster') {
+      await interaction.deferUpdate();
       const record = store.member(interaction.guildId, interaction.user.id);
-      if (record.activeShift) return interaction.reply({ content: 'You already have an active shift.', ephemeral: true });
+      if (record.activeShift) return interaction.editReply({ content: 'You already have an active shift.', components: [] });
       const department = interaction.values[0];
       const start = new Date().toISOString();
       record.activeShift = {
@@ -664,11 +885,15 @@ client.on(Events.InteractionCreate, async interaction => {
       record.lastClockIn = start;
       record.lastInactivityStrikeWeek = 0;
       store.save();
-      await interaction.update({ content: `Clocked in for **${department}** at ${timestamp(start)}.`, components: [] });
+      await interaction.editReply({ content: `Clocked in for **${department}** at ${timestamp(start)}.`, components: [] });
       await sendClockLog(interaction.guild, new EmbedBuilder().setColor(0x2ecc71).setTitle('Shift started').setDescription(`${interaction.user} clocked in for **${department}**.`).addFields({ name: 'Started', value: timestamp(start), inline: true }).setTimestamp());
       await refreshDutyRoster(interaction.guild);
     }
   } catch (error) {
+    if (error?.code === 10062) {
+      console.warn(`Ignoring expired interaction ${interaction.id}.`);
+      return;
+    }
     console.error('Interaction error:', error);
     const payload = { content: 'Something went wrong while handling that request. Please try again.', ephemeral: true };
     if (interaction.deferred || interaction.replied) await interaction.followUp(payload).catch(() => null);
@@ -680,7 +905,7 @@ client.on(Events.MessageCreate, async message => {
   if (!message.guild || message.author.bot) return;
   const guildData = store.guild(message.guild.id);
   if (message.channelId !== guildData.clockChannelId) return;
-  await movePanelToBottom(message.guild).catch(error => console.error('Could not reposition clock panel:', error));
+  schedulePanelMove(message.guild);
 });
 
 client.login(DISCORD_TOKEN);

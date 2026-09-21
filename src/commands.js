@@ -88,6 +88,25 @@ const commands = [
     .setName('unit-unassign')
     .setDescription('Remove the current holder from an Echo unit')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
-    .addStringOption(option => option.setName('unit').setDescription('Echo unit, E-400 through E-450').setRequired(true).setMinLength(5).setMaxLength(5)),].map(command => command.toJSON());
+    .addStringOption(option => option.setName('unit').setDescription('Echo unit, E-400 through E-450').setRequired(true).setMinLength(5).setMaxLength(5)),  new SlashCommandBuilder()
+    .setName('loa-request')
+    .setDescription('Request a leave of absence')
+    .addStringOption(option => option.setName('start-date').setDescription('First day of leave (YYYY-MM-DD)').setRequired(true).setMinLength(10).setMaxLength(10))
+    .addStringOption(option => option.setName('end-date').setDescription('Last day of leave (YYYY-MM-DD)').setRequired(true).setMinLength(10).setMaxLength(10))
+    .addStringOption(option => option.setName('reason').setDescription('Reason for the leave request').setRequired(true).setMaxLength(300)),
+  new SlashCommandBuilder()
+    .setName('loa-review')
+    .setDescription('Approve or decline a leave-of-absence request')
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+    .addUserOption(option => option.setName('member').setDescription('Member who requested leave').setRequired(true))
+    .addStringOption(option => option.setName('request-id').setDescription('Short request ID from /loa-status').setRequired(true).setMinLength(4).setMaxLength(36))
+    .addStringOption(option => option.setName('decision').setDescription('Approval decision').setRequired(true)
+      .addChoices({ name: 'Approve', value: 'approved' }, { name: 'Decline', value: 'declined' }))
+    .addStringOption(option => option.setName('note').setDescription('Optional decision note').setMaxLength(300)),
+  new SlashCommandBuilder()
+    .setName('loa-status')
+    .setDescription('View leave-of-absence requests')
+    .addUserOption(option => option.setName('member').setDescription('Member to inspect')),
+].map(command => command.toJSON());
 
 module.exports = commands;
