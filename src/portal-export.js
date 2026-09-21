@@ -14,6 +14,14 @@ function hoursBetween(start, end) {
   return Math.max(0, new Date(end).getTime() - new Date(start).getTime()) / (60 * 60 * 1000);
 }
 
+function recentShiftHistory(record) {
+  return (record.shifts ?? [])
+    .filter((shift) => shift.start && shift.end && shift.approvalStatus !== 'rejected')
+    .sort((first, second) => new Date(second.end).getTime() - new Date(first.end).getTime())
+    .slice(0, 12)
+    .map((shift) => ({ department: shift.department ?? 'Lakeside EMS', clockedInAt: shift.start, clockedOutAt: shift.end }));
+}
+
 function isApprovedToday(request, nowDate) {
   const today = nowDate.toISOString().slice(0, 10);
   return request.status === 'approved' && request.startDate <= today && request.endDate >= today;
@@ -50,6 +58,7 @@ function buildPortalSnapshot(guild) {
     callSign: callSignsByMember.get(memberId) ?? null,
     department: record.activeShift?.department ?? null,
     clockedInAt: record.activeShift?.start ?? null,
+    recentShifts: recentShiftHistory(record),
     strikes: record.strikes ?? 0,
     lastClockIn: record.lastClockIn ?? null,
   })).sort((first, second) => first.name.localeCompare(second.name));
