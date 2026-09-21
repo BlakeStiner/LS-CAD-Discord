@@ -27,6 +27,7 @@ const client = new Client({
 });
 const panelMoves = new Map();
 const rosterRefreshes = new Map();
+const unitRosterRefreshes = new Map();
 let shiftReminderCheckRunning = false;
 const ROSTER_OPTIONS = [
   'Lakeside EMS',
@@ -34,6 +35,7 @@ const ROSTER_OPTIONS = [
   'Lakeside Sheriff Office',
   'Nevada State Patrol',
 ];
+const ECHO_UNITS = Array.from({ length: 51 }, (_, index) => `E-${400 + index}`);
 
 function timestamp(dateOrMs) {
   return `<t:${Math.floor(new Date(dateOrMs).getTime() / 1000)}:F>`;
@@ -236,6 +238,65 @@ async function refreshAllDutyRosters() {
   }
 }
 
+function normalizeEchoUnit(value) {
+  const match = /^E-(\d{3})$/i.exec(value.trim());
+  if (!match) return null;
+  const number = Number(match[1]);
+  return number >= 400 && number <= 450 ? `E-${number}` : null;
+}
+
+function echoUnitAssignments(guildData) {
+  if (!guildData.echoUnitAssignments || typeof guildData.echoUnitAssignments !== 'object' || Array.isArray(guildData.echoUnitAssignments)) guildData.echoUnitAssignments = {};
+  return guildData.echoUnitAssignments;
+}
+
+function buildUnitRoster(guild) {
+  const assignments = echoUnitAssignments(store.guild(guild.id));
+  const fields = [];
+  for (let index = 0; index < ECHO_UNITS.length; index += 17) {
+    const units = ECHO_UNITS.slice(index, index + 17);
+    fields.push({
+      name: `${units[0]} – ${units.at(-1)}`,
+      value: units.map(unit => `**${unit}** — ${assignments[unit] ? `<@${assignments[unit]}>` : 'Unassigned'}`).join('\n'),
+      inline: true,
+    });
+  }
+  const assignedCount = Object.keys(assignments).filter(unit => ECHO_UNITS.includes(unit)).length;
+  return new EmbedBuilder()
+    .setColor(0x5865f2)
+    .setTitle('Lakeside Medical • Echo Unit Roster')
+    .setDescription(`Echo units **E-400 through E-450** • **${assignedCount}/51** assigned`)
+    .addFields(fields)
+    .setFooter({ text: 'Member mentions reflect current Discord nicknames automatically.' })
+    .setTimestamp();
+}
+
+async function refreshUnitRoster(guild) {
+  if (unitRosterRefreshes.has(guild.id)) return unitRosterRefreshes.get(guild.id);
+  const work = (async () => {
+    const guildData = store.guild(guild.id);
+    if (!guildData.unitRosterChannelId) return;
+    const channel = await guild.channels.fetch(guildData.unitRosterChannelId).catch(() => null);
+    if (!channel?.isTextBased()) return;
+    const payload = { embeds: [buildUnitRoster(guild)] };
+    const existing = guildData.unitRosterMessageId ? await channel.messages.fetch(guildData.unitRosterMessageId).catch(() => null) : null;
+    if (existing) await existing.edit(payload);
+    else {
+      const message = await channel.send(payload);
+      guildData.unitRosterMessageId = message.id;
+      store.save();
+    }
+  })();
+  unitRosterRefreshes.set(guild.id, work);
+  try { return await work; } finally { unitRosterRefreshes.delete(guild.id); }
+}
+
+async function refreshAllUnitRosters() {
+  for (const guildId of Object.keys(store.data().guilds)) {
+    const guild = await client.guilds.fetch(guildId).catch(() => null);
+    if (guild) await refreshUnitRoster(guild).catch(error => console.error(`Could not refresh unit roster for ${guildId}:`, error));
+  }
+}
 function statusEmbed(user, record) {
   const completed = record.shifts.filter(shift => shift.end && ensureShiftMetadata(shift).approvalStatus !== 'rejected');
   const totalMs = completed.reduce((total, shift) => total + (new Date(shift.end) - new Date(shift.start)), 0);
@@ -384,9 +445,11 @@ client.once(Events.ClientReady, async readyClient => {
   await checkInactivity();
   await checkShiftReminders();
   await refreshAllDutyRosters();
+  await refreshAllUnitRosters();
   setInterval(checkInactivity, 60 * 60 * 1000);
   setInterval(checkShiftReminders, 60 * 1000);
   setInterval(refreshAllDutyRosters, 5 * 60 * 1000);
+  setInterval(refreshAllUnitRosters, 5 * 60 * 1000);
 });
 
 client.on(Events.InteractionCreate, async interaction => {
@@ -409,7 +472,40 @@ client.on(Events.InteractionCreate, async interaction => {
         await refreshDutyRoster(interaction.guild);
         return interaction.reply({ content: `Live duty roster is ready in ${channel}.`, ephemeral: true });
       }
-      if (interaction.commandName === 'clock-config') {
+      if (interaction.commandName === 'unit-roster') {
+        const channel = interaction.options.getChannel('channel') ?? interaction.channel;
+        if (!channel?.isTextBased() || channel.isDMBased()) return interaction.reply({ content: 'Choose a server text channel for the Echo unit roster.', ephemeral: true });
+        guildData.unitRosterChannelId = channel.id;
+        guildData.unitRosterMessageId = null;
+        store.save();
+        await refreshUnitRoster(interaction.guild);
+        return interaction.reply({ content: `Echo unit roster is ready in ${channel}.`, ephemeral: true });
+      }
+      if (interaction.commandName === 'unit-assign') {
+        const user = interaction.options.getUser('member', true);
+        const unit = normalizeEchoUnit(interaction.options.getString('unit', true));
+        if (!unit) return interaction.reply({ content: 'Use an Echo unit from **E-400** through **E-450**.', ephemeral: true });
+        const assignments = echoUnitAssignments(guildData);
+        const currentHolder = assignments[unit];
+        if (currentHolder && currentHolder !== user.id) return interaction.reply({ content: `**${unit}** is already assigned to <@${currentHolder}>. Unassign it first before replacing the holder.`, ephemeral: true });
+        const previousUnit = Object.keys(assignments).find(assignedUnit => assignments[assignedUnit] === user.id);
+        if (previousUnit && previousUnit !== unit) delete assignments[previousUnit];
+        assignments[unit] = user.id;
+        store.save();
+        await refreshUnitRoster(interaction.guild);
+        return interaction.reply({ content: `${user} is assigned to **${unit}**${previousUnit && previousUnit !== unit ? ` (moved from **${previousUnit}**)` : ''}.`, ephemeral: true });
+      }
+      if (interaction.commandName === 'unit-unassign') {
+        const unit = normalizeEchoUnit(interaction.options.getString('unit', true));
+        if (!unit) return interaction.reply({ content: 'Use an Echo unit from **E-400** through **E-450**.', ephemeral: true });
+        const assignments = echoUnitAssignments(guildData);
+        const memberId = assignments[unit];
+        if (!memberId) return interaction.reply({ content: `**${unit}** is already unassigned.`, ephemeral: true });
+        delete assignments[unit];
+        store.save();
+        await refreshUnitRoster(interaction.guild);
+        return interaction.reply({ content: `Removed <@${memberId}> from **${unit}**.`, ephemeral: true });
+      }      if (interaction.commandName === 'clock-config') {
         const trackedRole = interaction.options.getRole('tracked-role');
         const inactivityDays = interaction.options.getInteger('inactivity-days');
         if (trackedRole) {

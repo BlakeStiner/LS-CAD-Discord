@@ -73,6 +73,21 @@ const commands = [
     .addStringOption(option => option.setName('decision').setDescription('Approval decision').setRequired(true)
       .addChoices({ name: 'Approve', value: 'approved' }, { name: 'Reject', value: 'rejected' }))
     .addStringOption(option => option.setName('note').setDescription('Optional review note').setMaxLength(300)),
-].map(command => command.toJSON());
+  new SlashCommandBuilder()
+    .setName('unit-roster')
+    .setDescription('Create or refresh the Echo unit assignment roster')
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+    .addChannelOption(option => option.setName('channel').setDescription('Channel for the unit roster (defaults to this channel)')),
+  new SlashCommandBuilder()
+    .setName('unit-assign')
+    .setDescription('Assign a member to an Echo unit')
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+    .addUserOption(option => option.setName('member').setDescription('Member receiving the call sign').setRequired(true))
+    .addStringOption(option => option.setName('unit').setDescription('Echo unit, E-400 through E-450').setRequired(true).setMinLength(5).setMaxLength(5)),
+  new SlashCommandBuilder()
+    .setName('unit-unassign')
+    .setDescription('Remove the current holder from an Echo unit')
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+    .addStringOption(option => option.setName('unit').setDescription('Echo unit, E-400 through E-450').setRequired(true).setMinLength(5).setMaxLength(5)),].map(command => command.toJSON());
 
 module.exports = commands;

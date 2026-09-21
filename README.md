@@ -16,6 +16,12 @@ Discord bot foundation for replacing FiveRoster's clock-in functionality.
 
 Discord cannot move a message in place. The bot reposts its one control panel after activity in the configured clock channel, keeping it at the bottom; use a dedicated clock channel so the feed stays tidy. The panel buttons remain usable after restarts.
 
+## Feature 2: Echo unit roster
+
+- A persistent **Echo Unit Roster** reserves units **E-400 through E-450**.
+- Managers assign a member using `/unit-assign member unit:E-400`; assigning the same member elsewhere moves them to the new unit.
+- The roster uses live member mentions, so it automatically displays each member’s current server nickname.
+- Managers can remove an assignment with `/unit-unassign unit:E-400`.
 ## Setup
 
 1. Create an application and bot at the [Discord Developer Portal](https://discord.com/developers/applications).
