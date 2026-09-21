@@ -41,11 +41,13 @@ function activityForMember(memberName, record) {
 
 function buildPortalSnapshot(guild) {
   const guildData = store.guild(guild.id);
+  const callSignsByMember = new Map(Object.entries(guildData.echoUnitAssignments ?? {}).map(([callSign, memberId]) => [String(memberId), callSign]));
   const now = new Date();
   const nowMs = now.getTime();
   const weekStart = nowMs - weekMs;
   const members = Object.entries(guildData.members).map(([memberId, record]) => ({
     name: safeName(guild, memberId),
+    callSign: callSignsByMember.get(memberId) ?? null,
     department: record.activeShift?.department ?? null,
     clockedInAt: record.activeShift?.start ?? null,
     strikes: record.strikes ?? 0,
@@ -53,6 +55,7 @@ function buildPortalSnapshot(guild) {
   })).sort((first, second) => first.name.localeCompare(second.name));
   const activeShifts = members.filter(member => member.clockedInAt).map(member => ({
     name: member.name,
+    callSign: member.callSign,
     department: member.department,
     clockedInAt: member.clockedInAt,
   })).sort((first, second) => new Date(first.clockedInAt) - new Date(second.clockedInAt));
