@@ -37,6 +37,8 @@ const unitRosterRefreshes = new Map();
 let shiftReminderCheckRunning = false;
 let supervisorCommandCheckRunning = false;
 const PANEL_REPOST_DELAY_MS = 6000;
+let dispatchNotificationCheckRunning = false;
+const processedDispatchNotificationIds = new Set();
 const PANEL_RETIRE_DELAY_MS = 15000;
 const ROSTER_OPTIONS = [
   'Lakeside EMS',
@@ -678,6 +680,58 @@ async function checkSupervisorCommands() {
 }
 
 client.once(Events.ClientReady, async readyClient => {
+function dispatchNotificationsUrl() {
+  const supervisorUrl = supervisorCommandsUrl();
+  return supervisorUrl ? supervisorUrl.replace(/\/api\/supervisor\/commands\/?$/, '/api/dispatch/notifications') : null;
+}
+
+function notificationEmbed(command) {
+  const title = { assigned: 'Assigned to a call', updated: 'Call updated', note: 'New dispatch note', released: 'Released from call', cleared: 'Call cleared' }[command.action] || 'Dispatch update';
+  const color = { assigned: 0x3498db, updated: 0x3498db, note: 0xf1c40f, released: 0x95a5a6, cleared: 0x2ecc71 }[command.action] || 0x3498db;
+  const callNumber = command.callNumber || 'Dispatch call';
+  const description = command.action === 'assigned' ? `You have been assigned to **${callNumber}**.`
+    : command.action === 'released' ? `You have been released from **${callNumber}**.`
+      : command.action === 'cleared' ? `**${callNumber}** has been cleared.`
+        : command.action === 'note' ? `A dispatcher added a note to **${callNumber}**.`
+          : `A dispatcher updated **${callNumber}**.`;
+  const fields = [
+    { name: 'Priority', value: String(command.priority || 'Normal'), inline: true },
+    { name: 'Location', value: String(command.location || 'Location pending').slice(0, 1024), inline: true },
+    { name: 'Details', value: String(command.details || 'Details pending').slice(0, 1024) },
+  ];
+  if (command.note) fields.push({ name: 'Dispatch note', value: String(command.note).slice(0, 1024) });
+  if (command.actionBy) fields.push({ name: 'Dispatcher', value: String(command.actionBy).slice(0, 1024), inline: true });
+  return new EmbedBuilder().setColor(color).setTitle(title).setDescription(description).addFields(fields).setTimestamp();
+}
+
+async function acknowledgeDispatchNotification(url, id, result) {
+  const response = await fetch(url, { method: 'POST', headers: portalHeaders(), body: JSON.stringify({ id, result }), signal: AbortSignal.timeout(10_000) });
+  if (!response.ok) throw new Error(`Portal returned ${response.status}`);
+}
+
+async function checkDispatchNotifications() {
+  const url = dispatchNotificationsUrl();
+  if (!url || !portalIngestToken() || dispatchNotificationCheckRunning) return;
+  dispatchNotificationCheckRunning = true;
+  try {
+    const response = await fetch(url, { headers: portalHeaders(), signal: AbortSignal.timeout(10_000) });
+    if (!response.ok) throw new Error(`Portal returned ${response.status}`);
+    const payload = await response.json(); const queued = Array.isArray(payload.commands) ? payload.commands : [];
+    for (const command of queued) {
+      if (!Number.isSafeInteger(command?.id) || !command.memberId || !command.action) continue;
+      let result = 'Already processed by this bot.';
+      if (!processedDispatchNotificationIds.has(command.id)) {
+        const delivered = await sendShiftReminder(command.memberId, notificationEmbed(command));
+        result = delivered ? 'Direct message delivered.' : 'Direct message could not be delivered; the member may block server direct messages.';
+        processedDispatchNotificationIds.add(command.id);
+        if (processedDispatchNotificationIds.size > 250) processedDispatchNotificationIds.delete(processedDispatchNotificationIds.values().next().value);
+      }
+      await acknowledgeDispatchNotification(url, command.id, result).catch(error => console.warn(`Could not acknowledge dispatch notification ${command.id}:`, error.message));
+    }
+  } catch (error) { console.warn('Could not check dispatch notifications:', error.message); }
+  finally { dispatchNotificationCheckRunning = false; }
+}
+
   console.log(`Ready as ${readyClient.user.tag}`);
   const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
   const route = DISCORD_GUILD_ID
@@ -699,6 +753,8 @@ client.once(Events.ClientReady, async readyClient => {
     if (guild) await guild.members.fetch().catch(() => null);
   }
   await refreshAllPortalSnapshots();
+  await checkDispatchNotifications();
+  setInterval(checkDispatchNotifications, 15 * 1000);
   await refreshAllUnitRosters();
   await checkSupervisorCommands();
   setInterval(checkSupervisorCommands, 15 * 1000);
