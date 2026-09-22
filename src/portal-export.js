@@ -54,6 +54,7 @@ function buildPortalSnapshot(guild) {
   const nowMs = now.getTime();
   const weekStart = nowMs - weekMs;
   const members = Object.entries(guildData.members).map(([memberId, record]) => ({
+    id: memberId,
     name: safeName(guild, memberId),
     callSign: callSignsByMember.get(memberId) ?? null,
     department: record.activeShift?.department ?? null,
@@ -63,6 +64,7 @@ function buildPortalSnapshot(guild) {
     lastClockIn: record.lastClockIn ?? null,
   })).sort((first, second) => first.name.localeCompare(second.name));
   const activeShifts = members.filter(member => member.clockedInAt).map(member => ({
+    id: member.id,
     name: member.name,
     callSign: member.callSign,
     department: member.department,
@@ -139,9 +141,30 @@ async function publishPortalSnapshot(snapshot) {
   }
 }
 
+// The ingest URL is the portal's /api/operations/ingest route; the supervisor
+// command queue hangs off the same origin and reuses the same ingest token.
+function supervisorCommandsUrl() {
+  const endpoint = process.env.PORTAL_INGEST_URL?.trim();
+  if (!endpoint) return null;
+  try {
+    const url = new URL(endpoint);
+    url.pathname = (url.pathname.replace(/\/api\/operations\/ingest\/?$/, '') + '/api/supervisor/commands').replace(/^\/+/, '/');
+    return url.toString();
+  } catch (error) {
+    console.error('PORTAL_INGEST_URL is not a valid URL:', error.message);
+    return null;
+  }
+}
+
+function portalIngestToken() {
+  return process.env.PORTAL_INGEST_TOKEN?.trim() ?? '';
+}
+
 module.exports = {
   buildPortalSnapshot,
   writePortalSnapshot,
   publishPortalSnapshot,
+  supervisorCommandsUrl,
+  portalIngestToken,
   snapshotPath,
 };

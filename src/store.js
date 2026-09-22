@@ -40,11 +40,13 @@ function guild(guildId) {
       trackedRoleId: null,
       inactivityDays: 7,
       enforcementStartedAt: null,
+      processedSupervisorCommandIds: [],
       leaveRequests: [],
       members: {},
     };
   }
   if (!Array.isArray(data.guilds[guildId].leaveRequests)) data.guilds[guildId].leaveRequests = [];
+  if (!Array.isArray(data.guilds[guildId].processedSupervisorCommandIds)) data.guilds[guildId].processedSupervisorCommandIds = [];
   if (!data.guilds[guildId].echoUnitAssignments || typeof data.guilds[guildId].echoUnitAssignments !== 'object' || Array.isArray(data.guilds[guildId].echoUnitAssignments)) data.guilds[guildId].echoUnitAssignments = {};
   return data.guilds[guildId];
 }
@@ -64,4 +66,29 @@ function member(guildId, memberId) {
   return guildData.members[memberId];
 }
 
-module.exports = { data: () => data, guild, member, save };
+function processedSupervisorCommandIds(guildId) {
+  const guildData = guild(guildId);
+  if (!Array.isArray(guildData.processedSupervisorCommandIds)) guildData.processedSupervisorCommandIds = [];
+  return guildData.processedSupervisorCommandIds;
+}
+
+// A command that was executed but not acknowledged is served again by the
+// portal, so executed IDs are remembered to keep shifts single-counted.
+function hasProcessedSupervisorCommand(guildId, commandId) {
+  return processedSupervisorCommandIds(guildId).includes(commandId);
+}
+
+function markSupervisorCommandProcessed(guildId, commandId) {
+  const ids = processedSupervisorCommandIds(guildId);
+  if (!ids.includes(commandId)) ids.push(commandId);
+  if (ids.length > 200) ids.splice(0, ids.length - 200);
+}
+
+module.exports = {
+  data: () => data,
+  guild,
+  member,
+  save,
+  hasProcessedSupervisorCommand,
+  markSupervisorCommandProcessed,
+};

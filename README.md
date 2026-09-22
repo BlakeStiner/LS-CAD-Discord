@@ -20,6 +20,12 @@ Discord bot foundation for replacing FiveRoster's clock-in functionality.
 
 Discord cannot move a message in place. The bot reposts its one control panel after activity in the configured clock channel, keeping it at the bottom; use a dedicated clock channel so the feed stays tidy. The panel buttons remain usable after restarts.
 
+## Portal supervisor controls
+
+When `PORTAL_INGEST_URL` and `PORTAL_INGEST_TOKEN` are set, the bot also polls the portal's supervisor command queue every 15 seconds using the same credentials. Portal supervisors can queue manual clock-ins, clock-outs, and clock-out reminders from a unit profile page; the bot applies each change to its persistent clock records, posts the audit entry to the clock channel, refreshes the duty roster, republishes the portal snapshot, and acknowledges the command back to the portal.
+
+Every manual change direct-messages the affected member, naming the supervisor who issued it plus the recorded time and department. If Discord blocks the direct message (for example, because the member disables server DMs), the shift change still applies, but the bot reports the delivery failure back to the portal so the supervisor sees it. Snapshots include each member's Discord ID so portal actions target the right person.
+
 ## Feature 2: Leave of absence
 
 - Members submit inclusive date-range requests with `/loa-request`.

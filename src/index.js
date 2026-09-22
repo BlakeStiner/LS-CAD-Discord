@@ -17,7 +17,7 @@ const {
 } = require('discord.js');
 const commands = require('./commands');
 const store = require('./store');
-const { writePortalSnapshot, publishPortalSnapshot } = require('./portal-export');
+const { writePortalSnapshot, publishPortalSnapshot, supervisorCommandsUrl, portalIngestToken } = require('./portal-export');
 
 const { DISCORD_TOKEN, DISCORD_CLIENT_ID, DISCORD_GUILD_ID } = process.env;
 if (!DISCORD_TOKEN || !DISCORD_CLIENT_ID) {
@@ -35,6 +35,7 @@ const panelMoveTimers = new Map();
 const rosterRefreshes = new Map();
 const unitRosterRefreshes = new Map();
 let shiftReminderCheckRunning = false;
+let supervisorCommandCheckRunning = false;
 const PANEL_REPOST_DELAY_MS = 6000;
 const PANEL_RETIRE_DELAY_MS = 15000;
 const ROSTER_OPTIONS = [
@@ -533,6 +534,149 @@ async function checkShiftReminders() {
   }
 }
 
+function portalHeaders() {
+  return {
+    authorization: `Bearer ${portalIngestToken()}`,
+    'content-type': 'application/json',
+  };
+}
+
+async function supervisorGuild() {
+  if (DISCORD_GUILD_ID) return client.guilds.fetch(DISCORD_GUILD_ID).catch(() => null);
+  const guilds = [...client.guilds.cache.values()];
+  return guilds.length === 1 ? guilds[0] : null;
+}
+
+async function publishPortalSnapshotForGuild(guild) {
+  try {
+    await publishPortalSnapshot(writePortalSnapshot(guild));
+  } catch (error) {
+    console.error(`Could not republish portal snapshot for ${guild.id}:`, error);
+  }
+}
+
+async function executeSupervisorCommand(guild, command) {
+  const member = await guild.members.fetch(command.memberId).catch(() => null);
+  if (!member || member.user.bot) return 'No change: the selected Discord member is no longer available in the server.';
+  const record = store.member(guild.id, command.memberId);
+  const supervisor = command.requestedByName?.trim() || 'A supervisor';
+
+  if (command.action === 'clock-in') {
+    if (!ROSTER_OPTIONS.includes(command.department)) return 'No change: the requested department is not a valid roster.';
+    if (record.activeShift) return `No change: ${member.displayName} is already clocked in for ${record.activeShift.department}.`;
+    const start = new Date().toISOString();
+    record.activeShift = {
+      id: randomUUID(),
+      start,
+      department: command.department,
+      source: 'supervisor',
+      approvalStatus: 'recorded',
+      audit: [{ at: start, action: 'supervisor-clocked-in', by: command.requestedById, byName: supervisor, commandId: command.id }],
+    };
+    record.lastClockIn = start;
+    record.lastInactivityStrikeWeek = 0;
+    store.save();
+    const dmDelivered = await sendShiftReminder(member.id, new EmbedBuilder()
+      .setColor(0x2ecc71)
+      .setTitle('Supervisor clock-in recorded')
+      .setDescription(`${supervisor} clocked you in for **${command.department}** from the operations portal.`)
+      .addFields({ name: 'Department', value: command.department, inline: true }, { name: 'Clocked in', value: timestamp(start), inline: true })
+      .setTimestamp());
+    await sendClockLog(guild, new EmbedBuilder().setColor(0x2ecc71).setTitle('Supervisor started a shift').setDescription(`${member} was clocked in for **${command.department}** by **${supervisor}** via the operations portal.`).addFields({ name: 'Started', value: timestamp(start), inline: true }).setTimestamp());
+    await refreshDutyRoster(guild).catch(error => console.error(`Could not refresh duty roster for supervisor command ${command.id}:`, error));
+    await publishPortalSnapshotForGuild(guild);
+    return `Clocked ${member.displayName} in for ${command.department}, recorded at ${start}.${dmDelivered ? ' Direct-message confirmation delivered.' : ' Direct-message confirmation could not be delivered; the member may block server direct messages.'}`;
+  }
+
+  if (command.action === 'clock-out') {
+    if (!record.activeShift) return `No change: ${member.displayName} is not currently clocked in.`;
+    const end = new Date().toISOString();
+    const shift = ensureShiftMetadata({ ...record.activeShift, end, endReason: 'supervisor-manual-clock-out' });
+    shift.audit.push({ at: end, action: 'supervisor-clocked-out', by: command.requestedById, byName: supervisor, commandId: command.id });
+    record.shifts.push(shift);
+    record.activeShift = null;
+    store.save();
+    const recordedDuration = duration(new Date(end) - new Date(shift.start));
+    const dmDelivered = await sendShiftReminder(member.id, new EmbedBuilder()
+      .setColor(0xe74c3c)
+      .setTitle('Supervisor clock-out recorded')
+      .setDescription(`${supervisor} clocked you out of **${shift.department}** from the operations portal.`)
+      .addFields({ name: 'Department', value: shift.department, inline: true }, { name: 'Clocked out', value: timestamp(end), inline: true }, { name: 'Recorded duration', value: recordedDuration, inline: true })
+      .setTimestamp());
+    await sendClockLog(guild, new EmbedBuilder().setColor(0xe74c3c).setTitle('Supervisor completed a shift').setDescription(`${member} was clocked out of **${shift.department}** by **${supervisor}** via the operations portal.`).addFields({ name: 'Clocked out', value: timestamp(end), inline: true }, { name: 'Recorded duration', value: recordedDuration, inline: true }).setTimestamp());
+    await refreshDutyRoster(guild).catch(error => console.error(`Could not refresh duty roster for supervisor command ${command.id}:`, error));
+    await publishPortalSnapshotForGuild(guild);
+    return `Clocked ${member.displayName} out of ${shift.department}; recorded duration ${recordedDuration}.${dmDelivered ? ' Direct-message confirmation delivered.' : ' Direct-message confirmation could not be delivered; the member may block server direct messages.'}`;
+  }
+
+  if (command.action === 'clock-reminder') {
+    if (!record.activeShift) return `No change: ${member.displayName} is not currently clocked in.`;
+    const dmDelivered = await sendShiftReminder(member.id, new EmbedBuilder()
+      .setColor(0xf1c40f)
+      .setTitle('Clock-out reminder from a supervisor')
+      .setDescription(`${supervisor} asked you to clock out through the operations portal when your **${record.activeShift.department}** shift is complete.`)
+      .addFields({ name: 'Department', value: record.activeShift.department, inline: true }, { name: 'Clocked in', value: timestamp(record.activeShift.start), inline: true })
+      .setTimestamp());
+    await sendClockLog(guild, new EmbedBuilder().setColor(0xf1c40f).setTitle('Supervisor clock-out reminder').setDescription(`${member} was sent a clock-out reminder by **${supervisor}** via the operations portal.`).setTimestamp());
+    return dmDelivered
+      ? `Clock-out reminder delivered to ${member.displayName}.`
+      : `Clock-out reminder could not be delivered to ${member.displayName}; Discord rejected the direct message (privacy settings).`;
+  }
+
+  return 'No change: the requested supervisor action is not supported.';
+}
+
+async function acknowledgeSupervisorCommand(id, result) {
+  const url = supervisorCommandsUrl();
+  if (!url) throw new Error('PORTAL_INGEST_URL is not configured.');
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: portalHeaders(),
+    body: JSON.stringify({ id, result }),
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) throw new Error(`Portal returned ${response.status}`);
+}
+
+async function checkSupervisorCommands() {
+  const url = supervisorCommandsUrl();
+  if (!url || !portalIngestToken() || supervisorCommandCheckRunning) return;
+  supervisorCommandCheckRunning = true;
+  try {
+    const response = await fetch(url, { headers: portalHeaders(), signal: AbortSignal.timeout(10_000) });
+    if (!response.ok) throw new Error(`Portal returned ${response.status}`);
+    const payload = await response.json();
+    const queued = Array.isArray(payload.commands) ? payload.commands : [];
+    if (!queued.length) return;
+    const guild = await supervisorGuild();
+    if (!guild) {
+      console.warn('Deferring supervisor commands because no single Discord guild could be resolved.');
+      return;
+    }
+    for (const command of queued) {
+      if (!Number.isSafeInteger(command?.id) || typeof command?.memberId !== 'string' || !command.memberId || typeof command?.action !== 'string') continue;
+      let result;
+      if (store.hasProcessedSupervisorCommand(guild.id, command.id)) {
+        result = 'Already processed by this bot; no further change was made.';
+      } else {
+        try {
+          result = await executeSupervisorCommand(guild, command);
+        } catch (error) {
+          console.error(`Supervisor command ${command.id} failed:`, error);
+          result = 'The supervisor action failed while the bot was processing it; no shift change was recorded.';
+        }
+        store.markSupervisorCommandProcessed(guild.id, command.id);
+        store.save();
+      }
+      await acknowledgeSupervisorCommand(command.id, result).catch(error => console.warn(`Could not acknowledge supervisor command ${command.id}:`, error.message));
+    }
+  } catch (error) {
+    console.warn('Could not check supervisor commands:', error.message);
+  } finally {
+    supervisorCommandCheckRunning = false;
+  }
+}
+
 client.once(Events.ClientReady, async readyClient => {
   console.log(`Ready as ${readyClient.user.tag}`);
   const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
@@ -556,6 +700,8 @@ client.once(Events.ClientReady, async readyClient => {
   }
   await refreshAllPortalSnapshots();
   await refreshAllUnitRosters();
+  await checkSupervisorCommands();
+  setInterval(checkSupervisorCommands, 15 * 1000);
   setInterval(checkInactivity, 60 * 60 * 1000);
   setInterval(checkShiftReminders, 60 * 1000);
   setInterval(refreshAllDutyRosters, 5 * 60 * 1000);
