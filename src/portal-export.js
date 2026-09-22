@@ -4,6 +4,12 @@ const store = require('./store');
 
 const snapshotPath = path.join(__dirname, '..', 'portal', 'dist', 'data', 'operations.json');
 const weekMs = 7 * 24 * 60 * 60 * 1000;
+function portalIngestUrl() {
+  const configured = process.env.PORTAL_INGEST_URL?.trim();
+  if (configured) return configured;
+  const portalUrl = process.env.CAD_PORTAL_URL?.trim().replace(/\/+$/, '');
+  return portalUrl ? `${portalUrl}/api/operations/ingest` : '';
+}
 
 function safeName(guild, memberId) {
   const member = guild.members.cache.get(memberId);
@@ -119,8 +125,8 @@ function writePortalSnapshot(guild) {
 }
 
 async function publishPortalSnapshot(snapshot) {
-  const endpoint = process.env.PORTAL_INGEST_URL?.trim();
-  const token = process.env.PORTAL_INGEST_TOKEN?.trim();
+  const endpoint = portalIngestUrl();
+  const token = portalIngestToken();
   if (!endpoint || !token) return false;
 
   try {
@@ -144,7 +150,7 @@ async function publishPortalSnapshot(snapshot) {
 // The ingest URL is the portal's /api/operations/ingest route; the supervisor
 // command queue hangs off the same origin and reuses the same ingest token.
 function supervisorCommandsUrl() {
-  const endpoint = process.env.PORTAL_INGEST_URL?.trim();
+  const endpoint = portalIngestUrl();
   if (!endpoint) return null;
   try {
     const url = new URL(endpoint);
@@ -157,7 +163,7 @@ function supervisorCommandsUrl() {
 }
 
 function portalIngestToken() {
-  return process.env.PORTAL_INGEST_TOKEN?.trim() ?? '';
+  return process.env.PORTAL_INGEST_TOKEN?.trim() || process.env.CAD_INGEST_TOKEN?.trim() || '';
 }
 
 module.exports = {
